@@ -1,6 +1,11 @@
 llama-herd
 Copyright (c) 2026 the llama-herd authors
 
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+NOTE: the project's copyright holder of record is pending formation of the entity that will hold
+it; this line is to be updated at that point, together with .github/CLA.md.
+
 This product includes third-party open-source software. Each component remains under its own
 licence; the list below is regenerated as dependencies change.
 

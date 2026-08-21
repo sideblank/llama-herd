@@ -54,3 +54,25 @@ Do not bypass the hooks with `--no-verify`.
 > (free org, private repo), so CI reports violations but cannot yet *block* a push. When the repo
 > goes public — or the org moves to a paid plan — mark `commit-policy` a required status check on
 > `main` to make enforcement absolute.
+
+## Licensing
+
+llama-herd is licensed under the **Apache License 2.0** ([LICENSE](LICENSE)). New source files
+should carry the standard header:
+
+```
+// Copyright <year> the llama-herd authors
+// SPDX-License-Identifier: Apache-2.0
+```
+
+Contributions are covered by the [Contributor Licence Agreement](.github/CLA.md). **You keep the
+copyright in your contribution** — the agreement grants the project a licence, not ownership, and
+you stay free to use your own code anywhere else. Sign by adding a row to
+[CLA-SIGNATURES.md](CLA-SIGNATURES.md) with your first pull request.
+
+> The CLA is currently a **draft and not in force**; the signature check reports but does not block
+> until the receiving entity is formed and counsel has reviewed it.
+
+Third-party code carries its own licence. Record anything new in [NOTICE](NOTICE), and do not
+introduce GPL or AGPL code into first-party sources — it is incompatible with Apache-2.0
+distribution here.
