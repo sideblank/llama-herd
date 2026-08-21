@@ -21,6 +21,12 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
   "$checker" "$range" || status=1
 done
 
+# Internal identifiers / credentials must not leave the machine either.
+if ! "$repo_root/scripts/check-leaks.sh" >/dev/null 2>&1; then
+  "$repo_root/scripts/check-leaks.sh" >&2
+  status=1
+fi
+
 if [ "$status" -ne 0 ]; then
   echo >&2
   echo "pre-push: push rejected — fix the commits above before pushing." >&2

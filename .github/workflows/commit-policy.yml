@@ -41,10 +41,16 @@ jobs:
       - name: Enforce commit policy
         run: ./scripts/check-commits.sh ${{ steps.range.outputs.range }}
 
+      - name: Scan for internal identifiers and credentials
+        env:
+          INTERNAL_PATTERNS: ${{ secrets.INTERNAL_PATTERNS }}
+        run: ./scripts/check-leaks.sh
+
       - name: Verify hooks and ignore rules are intact
         run: |
           set -euo pipefail
-          for f in .githooks/commit-msg .githooks/pre-commit .githooks/pre-push .gitignore scripts/check-commits.sh; do
+          for f in .githooks/commit-msg .githooks/pre-commit .githooks/pre-push .gitignore \
+                   scripts/check-commits.sh scripts/check-leaks.sh; do
             test -f "$f" || { echo "missing required file: $f"; exit 1; }
           done
           test -x .githooks/commit-msg  || { echo ".githooks/commit-msg is not executable"; exit 1; }
