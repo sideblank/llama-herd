@@ -38,6 +38,13 @@ func parseSweep(s string) ([]int, error) {
 }
 
 func benchCmd(args []string) int {
+	// A remote run takes a different set of flags entirely, so it is dispatched before the
+	// local flag set is parsed.
+	for _, a := range args {
+		if a == "--url" || strings.HasPrefix(a, "--url=") {
+			return remoteBench(args)
+		}
+	}
 	fs := newFlagSet("bench")
 	manifestPath := fs.String("manifest", "", "path to the model manifest (required)")
 	modelName := fs.String("model", "", "model to measure (defaults to the first in the manifest)")
@@ -217,4 +224,80 @@ func writeReport(r *bench.Report, jsonPath, mdPath string) error {
 		return r.WriteMarkdown(os.Stdout)
 	}
 	return nil
+}
+
+// remoteBench measures a deployed instance rather than a local engine.
+func remoteBench(args []string) int {
+	fs := newFlagSet("bench --url")
+	url := fs.String("url", "", "base URL of a running llama-herd")
+	key := fs.String("api-key", "", "API key, if the endpoint requires one")
+	model := fs.String("model", "", "model name to address")
+	sweep := fs.String("streams", "1,2,4", "comma-separated stream counts")
+	tokens := fs.Int("tokens", 128, "tokens per stream")
+	warmup := fs.Int("warmup", 16, "warmup tokens, discarded")
+	prompt := fs.String("prompt", "Write a detailed explanation of how memory bandwidth limits inference throughput.", "prompt text")
+	// Some hosts authenticate with their own header rather than a bearer token.
+	hdr := fs.String("header", "", "extra header, as Name:Value; repeat with commas")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *url == "" || *model == "" {
+		fmt.Fprintln(os.Stderr, "bench: --url and --model are required for a remote run")
+		return 2
+	}
+	counts, err := parseSweep(*sweep)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "bench:", err)
+		return 2
+	}
+
+	ctx := context.Background()
+	headers := map[string]string{}
+	for _, h := range strings.Split(*hdr, ",") {
+		if name, value, ok := strings.Cut(strings.TrimSpace(h), ":"); ok {
+			headers[strings.TrimSpace(name)] = strings.TrimSpace(value)
+		}
+	}
+	r := bench.NewRemote(*url, *key, *model, headers)
+
+	c, err := r.Counters(ctx)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "bench:", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stderr, "target: accelerated=%v on_gpu=%v mtp_loaded=%v gpu_free=%.1f GiB\n",
+		c.Accelerated, c.OnGPU, c.MTPLoaded, float64(c.GPUFreeBytes)/(1<<30))
+	if c.Warning != "" {
+		fmt.Fprintf(os.Stderr, "target warning: %s\n", c.Warning)
+	}
+	// Client-side rates include network and whatever else the host is doing. Say so once,
+	// rather than letting the numbers be read as engine throughput.
+	fmt.Fprintln(os.Stderr,
+		"note: rates below include network and host contention. Tokens-per-pass comes from\n"+
+			"      the server's own counters and is unaffected by either.")
+
+	for _, n := range counts {
+		fmt.Fprintf(os.Stderr, "\nmeasuring %d stream(s)...\n", n)
+		res, err := bench.RunRemote(ctx, r, bench.Config{
+			Model: *model, Prompt: *prompt, Streams: n, Tokens: *tokens, Warmup: *warmup,
+		})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "bench:", err)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "  client : decode %.1f tok/s, end-to-end %.1f tok/s, TTFT p50 %v\n",
+			res.DecodeTokPerSec, res.EndToEndTokPerSec, res.TTFTp50.Round(time.Millisecond))
+		fmt.Fprintf(os.Stderr, "  server : %.2f tokens/pass over %d passes, %d tokens, %d evictions\n",
+			res.TokensPerPass, res.DecodePasses, res.ServerTokens, res.Evictions)
+		if res.MTPLoaded {
+			if res.TokensPerPass > float64(n)*1.05 {
+				fmt.Fprintf(os.Stderr, "  MTP    : loaded and ACCEPTING — %.2fx the %d-stream baseline\n",
+					res.TokensPerPass/float64(n), n)
+			} else {
+				fmt.Fprintf(os.Stderr, "  MTP    : loaded but NOT accepting — occupying memory, "+
+					"returning nothing\n")
+			}
+		}
+	}
+	return 0
 }

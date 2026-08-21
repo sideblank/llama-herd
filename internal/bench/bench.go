@@ -145,6 +145,15 @@ type Result struct {
 
 	// DecodePasses is forward passes taken during the measurement, counted by the engine.
 	DecodePasses uint64 `json:"decode_passes"`
+	// ServerTokens is what the server counted, which can differ from what the client
+	// received if a connection dropped.
+	ServerTokens uint64 `json:"server_tokens"`
+	// Evictions during the run. Non-zero means the context budget was over-committed.
+	Evictions uint64 `json:"evictions"`
+	// MTPLoaded and OnGPU are reported by the server, not inferred.
+	MTPLoaded bool `json:"mtp_loaded"`
+	OnGPU     bool `json:"on_gpu"`
+
 	// TokensPerPass is tokens produced per forward pass. One pass serves every active
 	// stream, so this is normally about the stream count; above it means a speculative
 	// head is landing drafts.

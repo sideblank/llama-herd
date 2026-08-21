@@ -501,7 +501,10 @@ func TestModelOnGPUProducesNoWarning(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	resp, _ := http.Get(ts.URL + "/v1/info")
+	resp, err := http.Get(ts.URL + "/v1/info")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer resp.Body.Close()
 	var got Info
 	_ = json.NewDecoder(resp.Body).Decode(&got)
