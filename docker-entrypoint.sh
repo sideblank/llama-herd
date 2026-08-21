@@ -49,7 +49,12 @@ if [ ! -f "$MANIFEST" ]; then
     # Download to a temporary name and move into place only on success, so an
     # interrupted pull cannot leave a truncated file that later looks cached.
     tmp="${model_file}.partial"
-    curl -fL --retry 3 --retry-delay 5 -o "$tmp" "$LLAMA_HERD_MODEL_URL"
+    # -C - resumes a partial rather than restarting it. These files run to tens of
+    # gigabytes, so a connection dropped at 90% otherwise costs the whole download again,
+    # and --retry alone restarts from zero. The partial is named after the target file, so
+    # a resume can only ever continue the same model.
+    curl -fL -C - --retry 5 --retry-delay 5 --retry-all-errors \
+         -o "$tmp" "$LLAMA_HERD_MODEL_URL"
     mv "$tmp" "$model_file"
     echo "entrypoint: fetched $(du -h "$model_file" | cut -f1)"
   else
