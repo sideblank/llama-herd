@@ -41,6 +41,8 @@ usage:
                          measure throughput and emit a reproducible report
   llama-herd inspect [--all] <model.gguf>
                          report what a model file declares, including MTP layers
+  llama-herd fit [--card 3090] [--streams 4] [--context 128k] <model.gguf>
+                         report what streams x context actually fit on a card
   llama-herd version     print version and build information
   llama-herd doctor      verify linkage and list the devices it can see
 
@@ -67,6 +69,9 @@ func main() {
 
 	case "inspect":
 		os.Exit(inspect(flag.Args()[1:]))
+
+	case "fit":
+		os.Exit(fitCmd(flag.Args()[1:]))
 
 	case "version":
 		fmt.Printf("llama-herd %s\n", version)

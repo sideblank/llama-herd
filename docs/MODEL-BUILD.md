@@ -68,14 +68,36 @@ Each stage has a gate. A build that fails a gate is not published.
 
 ```
 1. acquire    pin the source repo AND its revision — not just the repo name
-2. convert    convert to BF16 GGUF, MTP included; --mmproj separately for vision models
-3. verify     assert the MTP tensors are actually present
-4. imatrix    compute the importance matrix on a recorded corpus
-5. quantize   produce the target quant levels using that imatrix
-6. verify     assert MTP survived quantization, at every level
-7. measure    quality against BF16, MTP accept rate, throughput per card
-8. publish    weights plus a card recording every input above
+2. modify     any weight-level transform (abliteration etc.) — on safetensors, before GGUF
+3. verify     assert MTP tensors survived the transform
+4. convert    convert to BF16 GGUF, MTP included; --mmproj separately for vision models
+5. verify     assert the MTP tensors are actually present
+6. imatrix    compute the importance matrix on a recorded corpus — on the MODIFIED weights
+7. quantize   produce the target quant levels using that imatrix
+8. verify     assert MTP survived quantization, at every level
+9. measure    quality against the modified BF16, MTP accept rate, throughput per card
+10. publish   weights plus a card recording every input above
 ```
+
+### Ordering that is not negotiable
+
+**Weight-level modification comes before conversion.** Tools that alter weights directly —
+abliteration being the obvious one — operate on safetensors, not GGUF. Running one after
+quantization is not possible, so it belongs early.
+
+**An imatrix computed before modification is invalid after it.** The importance matrix
+describes which weights matter; changing the weights changes the answer. Reusing a
+pre-modification imatrix silently produces a worse quantization, and nothing about the output
+reveals it.
+
+**Verify MTP after modification too.** A transform that rewrites attention or MLP projections
+may or may not preserve the MTP head, and it is cheaper to check than to discover after
+quantizing. This is a third distinct place the tensors can be lost, alongside conversion and
+quantization.
+
+**Quality is measured against the modified BF16, not the original.** Comparing a modified
+quantization against unmodified weights conflates two effects and tells you nothing about the
+quantization.
 
 ### Gates that matter
 
@@ -116,6 +138,10 @@ Base-model licences travel with quantizations and are **not** uniform:
 - **GLM** — varies by release; several carry use restrictions.
 - **Nemotron** — NVIDIA's open model licence, which is **not** Apache-2.0 and carries terms
   worth reading before redistribution.
+
+**Weight modification interacts with licence terms.** Some model licences carry acceptable-use
+terms that speak to safety behaviour; whether a given transform is permitted is a licence
+question per model, not a general one, and it belongs in the same check as redistribution.
 
 Resolve the licence per model **before** conversion, not before publication. Converting is
 cheap; discovering after a GPU-week of imatrix and quantization work that a model cannot be
