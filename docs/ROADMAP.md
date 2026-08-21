@@ -219,11 +219,17 @@ of the herd nothing, where a split guarantees each slot its share. So unified su
 where request sizes vary and the herd is not adversarial with itself — which describes calls
 fanned out from one plan, and does not describe unrelated tenants.
 
+**Status: experimental, off by default, untested under load.** The setting reaches the
+context and the ceiling does become the whole pool, so it works in the narrow sense. It is not
+a supported arrangement, because of the following.
+
 **Admission control has to change with it.** The scheduler currently admits against the
 per-stream ceiling, which under a split is a real reservation. Under one pool that ceiling is
 the whole cache, so four requests could each be admitted believing they may use everything,
-and the herd would then evict its way out of the overcommitment. Admitting against measured
-free capacity rather than a nominal per-stream limit is the work that makes unified safe.
+and the herd would then evict its way out of the overcommitment. Admitting against measured free
+capacity rather than a nominal per-stream limit is the work that makes unified safe, and it is
+not done. A fixed herd of four 128k streams is the tested arrangement and the one the
+throughput target assumes.
 
 ## 4. Multi-GPU and heterogeneous fleets
 

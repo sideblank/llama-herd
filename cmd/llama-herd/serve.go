@@ -169,6 +169,12 @@ func serve(args []string) int {
 			log.Printf("  %s speculation: lookup, up to %d tokens, pattern %d",
 				mm.Name, lk.MaxDraft(), lk.N)
 		}
+		if mm.KVUnified {
+			log.Printf("  %s WARNING: kv_unified is experimental and untested under load. "+
+				"Admission still checks a per-stream ceiling that no longer reserves anything, "+
+				"so concurrent long requests can overcommit the pool and be evicted mid-answer.",
+				mm.Name)
+		}
 		e := engine.New(r, ecfg)
 		if err := reg.Add(mm.Name, e, rend); err != nil {
 			fmt.Fprintln(os.Stderr, err)

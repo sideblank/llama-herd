@@ -139,6 +139,12 @@ Images must be inlined as data URLs. Remote URLs are refused: fetching a caller-
 server-side would let anyone reach whatever the server can, including cloud metadata endpoints
 and private networks.
 
+`kv_unified` lets one request use idle capacity from other slots instead of a fixed share. It
+is **experimental, off by default, and untested under load** — admission still checks a
+per-stream ceiling that no longer reserves anything, so concurrent long requests can
+overcommit the pool and be evicted mid-answer. The tested arrangement is a fixed herd of equal
+streams.
+
 **Speculative decoding** is available and costs no memory. Lookup drafting predicts from the
 sequence's own context — the prompt included — and proposes continuations that are verified in
 the same forward pass:

@@ -70,18 +70,20 @@ type Model struct {
 	// quantized cache does not work.
 	FlashAttention bool `json:"flash_attention,omitempty"`
 
-	// KVUnified shares one KV pool across streams instead of splitting it evenly.
+	// KVUnified shares one KV pool across streams instead of splitting it evenly, so a
+	// single request may exceed its even share and use whatever is free.
 	//
-	// This is what decides whether a single request can exceed its even share. Split, the
-	// per-stream ceiling is context divided by streams and is fixed — a request cannot
-	// borrow capacity from idle slots, so a herd sized for four 128k streams wastes three
-	// quarters of its cache serving one long request. Unified, any stream may use the
-	// whole pool.
+	// EXPERIMENTAL, OFF BY DEFAULT, AND NOT TESTED UNDER LOAD.
 	//
-	// The cost is that nothing is reserved. One long request can consume the pool and
-	// leave the rest of the herd nothing, where a split guarantees each slot its share.
-	// Shared prefixes also favour unified, which suits requests fanned out from a common
-	// prompt.
+	// It works, in that the setting reaches the context and the per-stream ceiling becomes
+	// the whole pool. What has not been done is the scheduling change it needs: admission
+	// still checks a per-stream ceiling, which is a real reservation under a split but is
+	// the entire cache under one pool. Several requests can therefore each be admitted
+	// believing they may use everything, and the herd evicts its way out of the
+	// overcommitment — visible to a user as answers truncating for no stated reason.
+	//
+	// Enable it if you want one long request to use idle capacity and you can tolerate
+	// that. Leave it off for a fixed four-by-128k herd, which is the tested arrangement.
 	KVUnified bool `json:"kv_unified,omitempty"`
 
 	// MMProjPath is the multimodal projector accompanying a vision model. Without it the
