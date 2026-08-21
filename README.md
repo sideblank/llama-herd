@@ -80,4 +80,13 @@ Requires a CUDA build of llama.cpp and a Go toolchain. Build instructions land w
 
 ## License
 
-Not yet chosen — see the open licensing question before depending on this.
+[Apache License 2.0](LICENSE). You may use, modify, and redistribute this code, including in
+commercial and closed-source products, subject to the licence terms.
+
+Contributions are accepted under the same licence, certified by a
+[DCO](.github/DCO) sign-off — see [CONTRIBUTING.md](CONTRIBUTING.md). Contributors keep the
+copyright in their own work; there is no CLA and no copyright assignment.
+
+Model weights published alongside this project carry the licence of their upstream base model,
+which is **not** Apache-2.0 and may restrict redistribution or commercial use. Check the model
+card for each build.

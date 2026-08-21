@@ -9,18 +9,23 @@
 set -uo pipefail
 
 # ---- policy ----------------------------------------------------------------
-ALLOWED_EMAIL="benjamin.goldman@gmail.com"          # the only identity that may author or commit
+PROJECT_EMAIL="benjamin.goldman@gmail.com"          # the maintainer identity
 ALLOWED_TRAILERS="Signed-off-by Refs Fixes Closes"
 ALLOWED_URL_HOSTS="github.com huggingface.co"
+REQUIRE_SIGNOFF=1                              # DCO: every commit needs a matching sign-off
+
+# Set to 0 BEFORE the repo goes public and starts accepting outside pull requests.
+# While 1, every commit must be authored by PROJECT_EMAIL — correct for a solo private
+# repo, but it would reject every external contributor once the project is open.
+SOLO_IDENTITY=1
 # ----------------------------------------------------------------------------
 
 in_list() { local n="$1"; shift; local i; for i in $*; do [ "${n,,}" = "${i,,}" ] && return 0; done; return 1; }
 
-# Message checks. $1 = message text, $2 = label for output. Echoes findings, returns 1 if any.
+# check_message <msg> [extra_allowed_email]
 check_message() {
-  local msg="$1" bad="" key host email
+  local msg="$1" extra="${2:-}" bad="" key host email
 
-  # 1. Trailers: only the allow-listed keys may appear.
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     key="${line%%:*}"
@@ -28,14 +33,13 @@ check_message() {
       bad="${bad}    - trailer '${key}:' is not permitted (allowed: ${ALLOWED_TRAILERS// /, })\n"
   done < <(printf '%s\n' "$msg" | git interpret-trailers --parse 2>/dev/null)
 
-  # 2. Email addresses: only the project identity may appear anywhere in the message.
   while IFS= read -r email; do
     [ -n "$email" ] || continue
-    [ "${email,,}" = "${ALLOWED_EMAIL,,}" ] || \
-      bad="${bad}    - address '${email}' is not permitted (allowed: ${ALLOWED_EMAIL})\n"
+    [ "${email,,}" = "${PROJECT_EMAIL,,}" ] && continue
+    [ -n "$extra" ] && [ "${email,,}" = "${extra,,}" ] && continue   # the author's own sign-off
+    bad="${bad}    - address '${email}' is not permitted here\n"
   done < <(printf '%s\n' "$msg" | grep -oE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' | sort -u)
 
-  # 3. URLs: only the allow-listed hosts may be linked.
   while IFS= read -r host; do
     [ -n "$host" ] || continue
     in_list "$host" $ALLOWED_URL_HOSTS || \
@@ -47,14 +51,30 @@ check_message() {
   return 1
 }
 
-# ---- single-message mode (used by the commit-msg hook) ----------------------
+# signoff_ok <msg> <author_email>
+signoff_ok() {
+  [ "$REQUIRE_SIGNOFF" -eq 1 ] || return 0
+  printf '%s\n' "$1" | git interpret-trailers --parse 2>/dev/null \
+    | grep -iE '^Signed-off-by:' \
+    | grep -oE '<[^>]+>' | tr -d '<>' \
+    | grep -qxiF "$2"
+}
+
+# ---- single-message mode (commit-msg hook) ---------------------------------
 if [ "${1:-}" = "--message" ]; then
   [ -n "${2:-}" ] || { echo "usage: $0 --message <file>" >&2; exit 2; }
-  out="$(check_message "$(cat "$2")")" && exit 0
-  echo "commit-msg: rejected — this repo allows only the listed trailers, addresses, and link hosts." >&2
-  printf "%b\n" "$out" >&2
-  echo "See CONTRIBUTING.md." >&2
-  exit 1
+  msg="$(cat "$2")"; me="$(git config user.email || true)"
+  out="$(check_message "$msg" "$me")"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "commit-msg: rejected — only the listed trailers, addresses, and link hosts are allowed." >&2
+    printf "%b\n" "$out" >&2; echo "See CONTRIBUTING.md." >&2; exit 1
+  fi
+  if ! signoff_ok "$msg" "$me"; then
+    echo "commit-msg: rejected — missing DCO sign-off for <$me>." >&2
+    echo "Commit with -s, or add:  Signed-off-by: $(git config user.name) <$me>" >&2
+    echo "See .github/DCO and CONTRIBUTING.md." >&2; exit 1
+  fi
+  exit 0
 fi
 
 # ---- range mode ------------------------------------------------------------
@@ -64,20 +84,24 @@ if [ -n "$range" ]; then
 else
   commits="$(git rev-list HEAD)"
 fi
-[ -n "$commits" ] && [ "$commits" != "" ] || { echo "check-commits: no commits in range."; exit 0; }
+[ -n "$commits" ] || { echo "check-commits: no commits in range."; exit 0; }
 
 fail=0; n=0
 while read -r sha; do
   [ -n "$sha" ] || continue
   n=$((n + 1))
-  bad=""
-  bad="${bad}$(check_message "$(git log -1 --format=%B "$sha")")"
-
+  msg="$(git log -1 --format=%B "$sha")"
   ae="$(git log -1 --format=%ae "$sha")"; ce="$(git log -1 --format=%ce "$sha")"
-  [ "$ae" = "$ALLOWED_EMAIL" ] || bad="${bad}    - author email '${ae}' is not the project identity (${ALLOWED_EMAIL})\n"
-  [ "$ce" = "$ALLOWED_EMAIL" ] || bad="${bad}    - committer email '${ce}' is not the project identity (${ALLOWED_EMAIL})\n"
+  bad="$(check_message "$msg" "$ae")"
 
-  # Tracked files must obey .gitignore. The ignore file is the only place names live.
+  if [ "$SOLO_IDENTITY" -eq 1 ]; then
+    [ "$ae" = "$PROJECT_EMAIL" ] || bad="${bad}    - author email '${ae}' is not the project identity (${PROJECT_EMAIL})\n"
+    [ "$ce" = "$PROJECT_EMAIL" ] || bad="${bad}    - committer email '${ce}' is not the project identity (${PROJECT_EMAIL})\n"
+  fi
+
+  signoff_ok "$msg" "$ae" || \
+    bad="${bad}    - missing DCO sign-off matching the author <${ae}> (commit with -s)\n"
+
   hits="$(git ls-tree -r --name-only "$sha" | git check-ignore --no-index --stdin 2>/dev/null || true)"
   if [ -n "$hits" ]; then
     while IFS= read -r h; do

@@ -8,6 +8,7 @@
 
 ## Checklist
 
+- [ ] Every commit is signed off (`git commit -s`) per the [DCO](.github/DCO)
 - [ ] I ran `./scripts/setup-repo.sh` in this clone, so the commit hooks are active
 - [ ] `./scripts/check-commits.sh main..HEAD` passes
 - [ ] No internal service names, hostnames, or infrastructure identifiers are introduced

@@ -55,7 +55,7 @@ Do not bypass the hooks with `--no-verify`.
 > goes public — or the org moves to a paid plan — mark `commit-policy` a required status check on
 > `main` to make enforcement absolute.
 
-## Licensing
+## Licensing and contributions
 
 llama-herd is licensed under the **Apache License 2.0** ([LICENSE](LICENSE)). New source files
 should carry the standard header:
@@ -65,13 +65,40 @@ should carry the standard header:
 // SPDX-License-Identifier: Apache-2.0
 ```
 
-Contributions are covered by the [Contributor Licence Agreement](.github/CLA.md). **You keep the
-copyright in your contribution** — the agreement grants the project a licence, not ownership, and
-you stay free to use your own code anywhere else. Sign by adding a row to
-[CLA-SIGNATURES.md](CLA-SIGNATURES.md) with your first pull request.
+### What contributing means
 
-> The CLA is currently a **draft and not in force**; the signature check reports but does not block
-> until the receiving entity is formed and counsel has reviewed it.
+**You keep the copyright in your contribution.** There is no CLA and no copyright assignment. You
+remain free to use your own code anywhere else, for any purpose.
+
+By submitting a contribution you license it to the project under Apache-2.0. This follows from
+Apache-2.0 §5: a contribution intentionally submitted for inclusion is under the terms of the
+licence, without any additional terms. Three consequences worth stating plainly:
+
+- **The grant is irrevocable.** Once merged, a contribution cannot be un-licensed, withdrawn, or
+  removed on demand.
+- **Contributing conveys no ownership of the project.** Each contributor holds copyright in their
+  own contribution only. The project is a collective work; no contributor acquires a stake in the
+  codebase as a whole, or any right to control it.
+- **Anyone may take this code and use it elsewhere**, including commercially and in closed-source
+  products, because Apache-2.0 permits it. That applies to everyone equally.
+
+### Sign your work (DCO)
+
+Every commit must carry a `Signed-off-by:` line matching its author. This certifies you have the
+right to submit the code — see [`.github/DCO`](.github/DCO) for the text you are certifying.
+
+```bash
+git commit -s -m "your message"
+```
+
+which appends:
+
+```
+Signed-off-by: Your Name <your@email>
+```
+
+Forgot it? `git commit --amend -s`, or for several commits
+`git rebase --signoff <base>`. CI checks every commit in the pull request.
 
 Third-party code carries its own licence. Record anything new in [NOTICE](NOTICE), and do not
 introduce GPL or AGPL code into first-party sources — it is incompatible with Apache-2.0
