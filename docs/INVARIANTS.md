@@ -45,6 +45,11 @@ quantization — for different reasons. Check after each.
 accept rate collapses, and the speculative path gives back nothing while still occupying
 VRAM. The cost is paid twice.
 
+**Loading the head is not using it.** A model can report its MTP layers loaded and still
+produce exactly one token per forward pass. Driving the head requires a second context of the
+MTP type, linked to the target, and a draft-then-verify loop; the model flag alone only makes
+the weights resident. Measured on a real model: tensors loaded, 1.00 tokens per pass.
+
 **Presence is not benefit.** The accept rate is the number that decides whether MTP earned its
 space, and it varies by model and by workload.
 

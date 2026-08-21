@@ -69,9 +69,24 @@ public API: `llama_model_params.load_mtp` loads the MTP layers, and a context ca
 `LLAMA_CONTEXT_TYPE_MTP`. Both are exposed by the binding. So the missing piece is not runtime
 support — it is a quantization that still contains the tensors to load.
 
+**Loading the layers is not using them.** Measured on a real 35B-A3B with MTP tensors
+confirmed loaded: **exactly 1.00 tokens per forward pass**, meaning no speculation at all. The
+head was resident, occupying memory, and returning nothing.
+
+The cause is architectural rather than a missing flag. Driving an MTP head needs a **second
+context** created with the MTP context type and linked to the target context, plus a
+draft-then-verify loop: the draft proposes several tokens, the target verifies them in one
+pass, and the longest matching prefix is accepted. Setting the model flag alone loads the
+weights and nothing drives them.
+
 Work items:
 
-- Build a quant that retains the MTP tensors, and confirm `load_mtp` finds them.
+- **Implement speculative decoding**: a second context linked to the target, a draft step, a
+  verify step, and prefix acceptance. This is the actual work; everything else about MTP is
+  ready.
+- Decide how a draft context shares the KV budget. It is a second context over the same
+  weights, so its cache competes with the target's for the same VRAM.
+- Confirm `load_mtp` finds the tensors in each candidate quant, which is already measurable.
 - Measure accept rate and the real end-to-end speedup, per model and per card.
 - Fall back to draft-model speculative decoding where a model has no native MTP head.
 
