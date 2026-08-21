@@ -61,6 +61,14 @@ cheap now and expensive once history accumulates.
 
 ## Ongoing
 
-- [ ] Go CI — build, vet, test, `-race` — added with the first code import.
+- [x] Go CI — `build.yml` builds and vets on Linux, macOS and Windows.
+- [ ] Add `-race` unit tests to CI once the engine core exists.
+- [ ] **Pin `LLAMA_CPP_REF`** in both workflows to a llama.cpp release tag. It currently floats on
+      `master`, so an upstream change can break a build with no commit here.
+- [ ] Confirm ARM runners are available for the release matrix. `ubuntu-24.04-arm` is free for
+      public repos; on a private repo it may need a paid plan.
+- [ ] Decide GPU backend coverage for releases. The matrix ships **CPU-only** builds today; CUDA
+      and Metal variants multiply the matrix and CUDA needs a toolkit install step.
+- [ ] Consider macOS codesigning and notarization — unsigned binaries are blocked on first run.
 - [ ] `CODEOWNERS` once there is more than one maintainer.
 - [ ] A release and versioning scheme before the first tag.

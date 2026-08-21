@@ -1,0 +1,61 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # Pin this to a llama.cpp release tag before the first real release. Leaving it
+  # floating means a build can break from an upstream change with no commit here.
+  LLAMA_CPP_REF: master
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: linux-amd64,   os: ubuntu-latest}
+          - {name: macos-arm64,   os: macos-14}
+          - {name: windows-amd64, os: windows-latest}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Build llama.cpp
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "$LLAMA_CPP_REF" \
+            https://github.com/ggml-org/llama.cpp.git "$RUNNER_TEMP/llama.cpp"
+          cmake -S "$RUNNER_TEMP/llama.cpp" -B "$RUNNER_TEMP/build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TOOLS=OFF \
+            -DLLAMA_BUILD_SERVER=OFF \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/prefix"
+          cmake --build "$RUNNER_TEMP/build" --config Release -j
+          cmake --install "$RUNNER_TEMP/build" --config Release
+
+      - name: Vet and build
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CGO_CFLAGS="-I$RUNNER_TEMP/prefix/include"
+          export CGO_LDFLAGS="-L$RUNNER_TEMP/prefix/lib"
+          gofmt -l . | tee /tmp/unformatted
+          test ! -s /tmp/unformatted || { echo "gofmt found unformatted files"; exit 1; }
+          go vet ./...
+          go build ./...

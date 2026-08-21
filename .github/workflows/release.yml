@@ -1,0 +1,152 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (dry run — does not publish)'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  # Pin this to a llama.cpp release tag before the first real release.
+  LLAMA_CPP_REF: master
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: linux-amd64,   os: ubuntu-latest,     ext: tar.gz}
+          - {name: linux-arm64,   os: ubuntu-24.04-arm,  ext: tar.gz}
+          - {name: darwin-arm64,  os: macos-14,          ext: tar.gz}
+          - {name: darwin-amd64,  os: macos-13,          ext: tar.gz}
+          - {name: windows-amd64, os: windows-latest,    ext: zip}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Build llama.cpp
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "$LLAMA_CPP_REF" \
+            https://github.com/ggml-org/llama.cpp.git "$RUNNER_TEMP/llama.cpp"
+          cmake -S "$RUNNER_TEMP/llama.cpp" -B "$RUNNER_TEMP/build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TOOLS=OFF \
+            -DLLAMA_BUILD_SERVER=OFF \
+            -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/prefix"
+          cmake --build "$RUNNER_TEMP/build" --config Release -j
+          cmake --install "$RUNNER_TEMP/build" --config Release
+
+      - name: Build llama-herd
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME}"
+          [ "${{ github.event_name }}" = "workflow_dispatch" ] && VERSION="${{ inputs.tag }}"
+
+          export CGO_CFLAGS="-I$RUNNER_TEMP/prefix/include"
+          # The archive ships its libraries beside the binary, so the loader must look
+          # next to the executable rather than in a system path that will not exist on
+          # the user's machine.
+          case "${{ runner.os }}" in
+            Linux)   export CGO_LDFLAGS="-L$RUNNER_TEMP/prefix/lib -Wl,-rpath,\$ORIGIN" ;;
+            macOS)   export CGO_LDFLAGS="-L$RUNNER_TEMP/prefix/lib -Wl,-rpath,@loader_path" ;;
+            Windows) export CGO_LDFLAGS="-L$RUNNER_TEMP/prefix/lib" ;;
+          esac
+
+          mkdir -p dist/llama-herd
+          go build -trimpath \
+            -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${GITHUB_SHA} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o "dist/llama-herd/llama-herd$([ "${{ runner.os }}" = Windows ] && echo .exe)" \
+            ./cmd/llama-herd
+
+      - name: Stage archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist/llama-herd
+          # Ship the runtime libraries beside the binary.
+          for d in "$RUNNER_TEMP/prefix/lib" "$RUNNER_TEMP/prefix/bin"; do
+            [ -d "$d" ] || continue
+            find "$d" -maxdepth 1 \( -name '*.so*' -o -name '*.dylib' -o -name '*.dll' \) -exec cp -P {} . \;
+          done
+          # Apache-2.0 requires shipping our NOTICE; llama.cpp is MIT and requires its
+          # copyright notice to travel with the binary form.
+          cp "$GITHUB_WORKSPACE/LICENSE" .
+          cp "$GITHUB_WORKSPACE/NOTICE" .
+          cp "$RUNNER_TEMP/llama.cpp/LICENSE" LICENSE-llama.cpp
+          ls -la
+
+      - name: Verify the binary actually links
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist/llama-herd
+          ./llama-herd version
+          ./llama-herd doctor
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          NAME="llama-herd_${GITHUB_REF_NAME}_${{ matrix.name }}"
+          cd dist
+          if [ "${{ matrix.ext }}" = "zip" ]; then
+            7z a "../${NAME}.zip" llama-herd >/dev/null
+          else
+            tar czf "../${NAME}.tar.gz" llama-herd
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: llama-herd_*.*
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd artifacts
+          sha256sum llama-herd_* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag \
+            artifacts/*

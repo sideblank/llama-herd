@@ -83,6 +83,20 @@ exist. Treat them as a design target, not a benchmark result, until CI can regen
 
 See [PROVENANCE.md](PROVENANCE.md) for what does and does not carry over.
 
+## Install
+
+Pre-built archives for Linux, macOS and Windows are attached to each
+[release](https://github.com/sideblank/llama-herd/releases). Each archive contains the binary
+with its llama.cpp libraries beside it, so it runs without a system-wide llama.cpp install.
+
+```bash
+tar xzf llama-herd_<version>_<platform>.tar.gz
+cd llama-herd
+./llama-herd doctor      # verifies the library links on your machine
+```
+
+Releases are CPU-only today; GPU builds are tracked in [LAUNCH.md](LAUNCH.md).
+
 ## Building
 
 Requires a Go toolchain and llama.cpp. Header and library locations are not hard-coded — supply
