@@ -95,8 +95,22 @@ func OpenSpeculative(r *Runner, types string, maxDraft int) (*Speculative, error
 	ctypes := C.CString(types)
 	defer C.free(unsafe.Pointer(ctypes))
 
+	// The draft context allocates its own KV cache and does not read the target's
+	// configuration, so every field it shares with the target is passed explicitly. Letting
+	// any of them default asks for the model's full trained context at f16 — which fails
+	// allocation on a card the target fits, and reports that failure as "no speculation
+	// available", the same thing a stripped head reports.
+	ck, cv := C.CString(r.kvTypeK), C.CString(r.kvTypeV)
+	defer C.free(unsafe.Pointer(ck))
+	defer C.free(unsafe.Pointer(cv))
+	flash := C.int32_t(0)
+	if r.flashAttn {
+		flash = 1
+	}
+
 	h := C.lhspec_init(unsafe.Pointer(r.model.c), unsafe.Pointer(r.ctx.c), ctypes,
-		C.int32_t(r.NSeqMax()), C.int32_t(maxDraft))
+		C.int32_t(r.NSeqMax()), C.int32_t(maxDraft),
+		C.int32_t(r.NCtx()), ck, cv, flash)
 	if h == nil {
 		return nil, ErrNoSpeculation
 	}

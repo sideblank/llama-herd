@@ -72,8 +72,27 @@ int32_t lhspec_types_for_model(const char *gguf_path, char *buf, int32_t cap) {
     return need;
 }
 
+// Map a ggml type name to its type, restricted to the types a KV cache accepts. An
+// unrecognised name falls back to f16 rather than throwing: the caller's cache type came
+// from a manifest that llama.cpp itself will validate when the target context is created,
+// so by this point an unknown name means the two builds disagree, and refusing to draft is
+// a better outcome than refusing to serve.
+static ggml_type kv_type_from_name(const char *name) {
+    if (!name || !*name) return GGML_TYPE_F16;
+    static const ggml_type candidates[] = {
+        GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0,
+        GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_IQ4_NL, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1,
+    };
+    for (ggml_type t : candidates) {
+        if (std::strcmp(ggml_type_name(t), name) == 0) return t;
+    }
+    return GGML_TYPE_F16;
+}
+
 void *lhspec_init(void *model_tgt, void *ctx_tgt, const char *types,
-                  int32_t n_seq, int32_t n_draft_max) {
+                  int32_t n_seq, int32_t n_draft_max,
+                  int32_t n_ctx, const char *type_k, const char *type_v,
+                  int32_t flash_attn) {
     if (!model_tgt || !ctx_tgt) return nullptr;
 
     auto *h = new (std::nothrow) holder();
@@ -84,6 +103,23 @@ void *lhspec_init(void *model_tgt, void *ctx_tgt, const char *types,
         if (n_draft_max > 0) {
             h->params.speculative.draft.n_max = n_draft_max;
         }
+
+        // The draft context gets its own KV cache, sized from these. Leaving them at their
+        // defaults asks for the model's full trained context at f16, which on a long-context
+        // model is enough to fail allocation on a card the target fits — and the failure is
+        // reported as a null context, which reads exactly like a model with no head.
+        if (n_ctx > 0) {
+            h->params.n_ctx = n_ctx;
+        }
+        h->params.cache_type_k = kv_type_from_name(type_k);
+        h->params.cache_type_v = kv_type_from_name(type_v);
+        h->params.speculative.draft.cache_type_k = h->params.cache_type_k;
+        h->params.speculative.draft.cache_type_v = h->params.cache_type_v;
+        // A quantized cache does not work without flash attention, so this tracks the
+        // target rather than being left to AUTO.
+        h->params.flash_attn_type = flash_attn
+            ? LLAMA_FLASH_ATTN_TYPE_ENABLED
+            : LLAMA_FLASH_ATTN_TYPE_AUTO;
         const auto names = split_csv(types);
         if (!names.empty()) {
             h->params.speculative.types = common_speculative_types_from_names(names);

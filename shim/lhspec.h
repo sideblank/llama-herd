@@ -33,9 +33,23 @@ int32_t lhspec_types_for_model(const char *gguf_path, char *buf, int32_t cap);
 
 /* Create a speculative driver over an already-loaded target model and context.
  * `types` is a comma-separated list such as "draft-mtp"; empty selects whatever the model
- * supports. Returns NULL on failure. */
+ * supports. Returns NULL on failure.
+ *
+ * The draft context is a real context with its own KV cache, so the caller must pass the
+ * target's geometry rather than letting it default. Defaulting is not a smaller version of
+ * the right answer: an unset context size means "the length the model was trained with",
+ * which for a long-context model is far larger than what the target was actually opened
+ * with, and unset cache types mean f16 regardless of what the target quantized to. Both
+ * together allocate enough to fail on a card the target fits comfortably — and the failure
+ * arrives as a null context, indistinguishable from a model that has no head at all.
+ *
+ * n_ctx is the total across sequences, matching the target. type_k and type_v are ggml type
+ * names such as "q8_0" or "f16"; NULL or empty means f16. flash_attn must match the target,
+ * and is required by any quantized cache. */
 void *lhspec_init(void *model_tgt, void *ctx_tgt, const char *types,
-                  int32_t n_seq, int32_t n_draft_max);
+                  int32_t n_seq, int32_t n_draft_max,
+                  int32_t n_ctx, const char *type_k, const char *type_v,
+                  int32_t flash_attn);
 
 void lhspec_free(void *spec);
 
