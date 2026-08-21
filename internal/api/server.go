@@ -133,7 +133,27 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
-	prompt, err := rend.RenderChat(req.Messages)
+
+	marker, acceptsMedia := eng.MediaMarker()
+	msgs := make([]engine.ChatMessage, 0, len(req.Messages))
+	var media [][]byte
+	for i, m := range req.Messages {
+		text, mm, err := m.parse(marker)
+		if err != nil {
+			s.writeErr(w, http.StatusBadRequest, "invalid_request_error",
+				fmt.Sprintf("messages[%d]: %v", i, err))
+			return
+		}
+		if len(mm) > 0 && !acceptsMedia {
+			s.writeErr(w, http.StatusBadRequest, "invalid_request_error",
+				fmt.Sprintf("model %q is text-only and cannot accept images", req.Model))
+			return
+		}
+		media = append(media, mm...)
+		msgs = append(msgs, engine.ChatMessage{Role: m.Role, Content: text})
+	}
+
+	prompt, err := rend.RenderChat(msgs)
 	if err != nil {
 		s.writeErr(w, http.StatusBadRequest, "invalid_request_error",
 			fmt.Sprintf("could not render messages: %v", err))
@@ -145,6 +165,7 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		MaxTokens: req.limit(),
 		Stop:      req.Stop,
 		Sampling:  req.sampling(),
+		Media:     media,
 	})
 	if err != nil {
 		status := http.StatusBadRequest

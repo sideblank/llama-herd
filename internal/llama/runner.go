@@ -35,6 +35,10 @@ type Runner struct {
 	// rebuilt when it actually differs from the default.
 	custom []bool
 
+	// vision is non-nil only when a projector was supplied. A text-only model is the
+	// common case and must not pay for the multimodal context.
+	vision *Vision
+
 	// chatTmpl is captured at load. Rendering then touches no live context state, which
 	// is what makes RenderChat safe to call from request goroutines while the decode
 	// loop is running.
@@ -54,6 +58,11 @@ type RunnerConfig struct {
 	Model     ModelParams
 	Context   ContextParams
 	Sampling  SamplingParams
+
+	// MMProjPath enables the vision lane. Empty leaves the model text-only.
+	MMProjPath string
+	// VisionGPU offloads the image encoder.
+	VisionGPU bool
 }
 
 // OpenRunner loads a model and prepares it to be scheduled.
@@ -97,6 +106,19 @@ func OpenRunner(cfg RunnerConfig) (*Runner, error) {
 		r.samplers[i] = s
 	}
 
+	if cfg.MMProjPath != "" {
+		v, err := OpenVision(m, VisionParams{
+			MMProjPath: cfg.MMProjPath,
+			UseGPU:     cfg.VisionGPU,
+			NThreads:   int(cfg.Context.NThreads),
+		})
+		if err != nil {
+			r.Close()
+			return nil, fmt.Errorf("vision: %w", err)
+		}
+		r.vision = v
+	}
+
 	// A missing chat template is not fatal: the model can still serve raw completions.
 	// It only means chat requests for it must be refused rather than rendered wrongly.
 	if tmpl, err := m.ChatTemplate(); err == nil {
@@ -116,6 +138,10 @@ func OpenRunner(cfg RunnerConfig) (*Runner, error) {
 
 // Close releases the batch, samplers, context and weights, in that order.
 func (r *Runner) Close() {
+	if r.vision != nil {
+		r.vision.Free()
+		r.vision = nil
+	}
 	if r.batch != nil {
 		r.batch.Free()
 		r.batch = nil
@@ -133,6 +159,27 @@ func (r *Runner) Close() {
 		r.model = nil
 	}
 }
+
+// HasVision reports whether this model can accept images.
+func (r *Runner) HasVision() bool { return r.vision != nil }
+
+// PrefillMedia encodes media with the prompt into seq's KV and returns the position
+// generation continues from. The scheduler then decodes that sequence normally.
+func (r *Runner) PrefillMedia(seq engine.SeqID, nPast engine.Pos, prompt string,
+	media [][]byte, logitsLast bool) (engine.Pos, error) {
+	if r.vision == nil {
+		return 0, ErrNoProjector
+	}
+	p, err := r.vision.Prefill(r.ctx, SeqID(seq), Pos(nPast), prompt, media,
+		r.batch.Cap(), logitsLast)
+	return engine.Pos(p), err
+}
+
+// MediaMarker is the placeholder a prompt must contain where media belongs.
+func (r *Runner) MediaMarker() string { return Marker() }
+
+// Summary describes the loaded model, including what it declares about MTP.
+func (r *Runner) Summary() string { return r.model.Summary() }
 
 // --- engine.Backend ---------------------------------------------------------
 

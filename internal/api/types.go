@@ -11,9 +11,12 @@ import "github.com/sideblank/llama-herd/internal/engine"
 
 // ChatRequest is the subset of the chat-completions request this server honours.
 type ChatRequest struct {
-	Model    string               `json:"model"`
-	Messages []engine.ChatMessage `json:"messages"`
-	Stream   bool                 `json:"stream"`
+	Model string `json:"model"`
+	// Messages keep their raw content so both the string and array-of-parts shapes
+	// survive decoding; they are reduced to text plus media once the model's marker is
+	// known, since the marker is model-specific.
+	Messages []message `json:"messages"`
+	Stream   bool      `json:"stream"`
 
 	MaxTokens int `json:"max_tokens,omitempty"`
 	// MaxCompletionTokens is the newer spelling. When both are present it wins.

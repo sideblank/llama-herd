@@ -103,3 +103,48 @@ func (s *Scripted) SampleAt(seq engine.SeqID, _ int32) (engine.Token, error) {
 	}
 	return s.eos, nil
 }
+
+// WithMedia wraps a Scripted backend so it also satisfies engine.MediaBackend, for testing
+// the media path without a projector.
+type WithMedia struct {
+	*Scripted
+	// Marker is the placeholder a prompt must contain.
+	MarkerText string
+	// Prefills records each media prefill: sequence, item count, and prompt.
+	Prefills []MediaCall
+	// PrefillErr, when set, is returned instead of prefilling.
+	PrefillErr error
+	// PosAfter is the position reported back to the scheduler.
+	PosAfter engine.Pos
+}
+
+// MediaCall is one recorded prefill.
+type MediaCall struct {
+	Seq    engine.SeqID
+	Items  int
+	Prompt string
+}
+
+var _ engine.MediaBackend = (*WithMedia)(nil)
+
+// NewWithMedia returns a scripted backend that accepts media.
+func NewWithMedia(nSeqMax uint32, batchCap int32, script string) *WithMedia {
+	return &WithMedia{
+		Scripted:   New(nSeqMax, batchCap, script),
+		MarkerText: "<__media__>",
+		PosAfter:   64,
+	}
+}
+
+func (w *WithMedia) MediaMarker() string { return w.MarkerText }
+
+func (w *WithMedia) PrefillMedia(seq engine.SeqID, _ engine.Pos, prompt string,
+	media [][]byte, _ bool) (engine.Pos, error) {
+	if w.PrefillErr != nil {
+		return 0, w.PrefillErr
+	}
+	w.mu.Lock()
+	w.Prefills = append(w.Prefills, MediaCall{Seq: seq, Items: len(media), Prompt: prompt})
+	w.mu.Unlock()
+	return w.PosAfter, nil
+}

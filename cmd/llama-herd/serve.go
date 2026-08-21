@@ -83,10 +83,12 @@ func runnerConfig(m manifest.Model) llama.RunnerConfig {
 	}
 
 	return llama.RunnerConfig{
-		ModelPath: m.Path,
-		Model:     mp,
-		Context:   cp,
-		Sampling:  sampling(m.Sampling),
+		ModelPath:  m.Path,
+		Model:      mp,
+		Context:    cp,
+		Sampling:   sampling(m.Sampling),
+		MMProjPath: m.MMProjPath,
+		VisionGPU:  m.VisionGPU,
 	}
 }
 
@@ -156,6 +158,10 @@ func serve(args []string) int {
 		}
 		log.Printf("  %s ready: %d streams, %d context (%d per stream)",
 			mm.Name, r.NSeqMax(), r.NCtx(), r.NCtxSeq())
+		log.Printf("  %s model: %s", mm.Name, r.Summary())
+		if r.HasVision() {
+			log.Printf("  %s vision: enabled (marker %q)", mm.Name, r.MediaMarker())
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

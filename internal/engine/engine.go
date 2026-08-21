@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -20,6 +21,9 @@ type Request struct {
 	// Sampling overrides the model's configured sampling for this request only.
 	// Nil keeps the model's defaults.
 	Sampling *SamplingParams
+	// Media carries encoded images or audio. Requires a backend implementing
+	// MediaBackend, and the prompt must contain that backend's marker once per item.
+	Media [][]byte
 }
 
 // Event is one item in a stream's output.
@@ -71,8 +75,16 @@ type slot struct {
 	ctx    context.Context
 	cancel func()
 
-	// batchIdx is where this slot's logits landed in the batch just decoded, or -1.
-	batchIdx int32
+	// batchIdx is where this slot's logits landed in the batch just decoded. It is only
+	// meaningful when hasLogits is set; a media prefill produces logits at the last
+	// position rather than at an index this loop assigned, which is why the two are
+	// tracked separately instead of overloading -1 to mean both "none" and "last".
+	batchIdx  int32
+	hasLogits bool
+
+	media     [][]byte
+	prompt    string
+	prefilled bool
 
 	// buf accumulates bytes that are not yet a complete UTF-8 sequence, and text used
 	// for stop-sequence matching.
@@ -134,6 +146,17 @@ func (e *Engine) Submit(ctx context.Context, req Request) (*Stream, error) {
 			len(toks), budget, e.be.NCtxSeq(), e.be.NSeqMax())
 	}
 
+	if len(req.Media) > 0 {
+		mb, ok := e.be.(MediaBackend)
+		if !ok {
+			return nil, errors.New("engine: this model cannot accept media")
+		}
+		if marker := mb.MediaMarker(); !strings.Contains(req.Prompt, marker) {
+			return nil, fmt.Errorf("engine: prompt must contain the media marker %q once per "+
+				"item, or the media is silently dropped and the model answers about nothing", marker)
+		}
+	}
+
 	cctx, cancel := context.WithCancel(ctx)
 	s := &slot{
 		seq:       -1,
@@ -141,6 +164,8 @@ func (e *Engine) Submit(ctx context.Context, req Request) (*Stream, error) {
 		maxTokens: req.MaxTokens,
 		stop:      req.Stop,
 		sampling:  req.Sampling,
+		media:     req.Media,
+		prompt:    req.Prompt,
 		out:       make(chan Event, 32),
 		ctx:       cctx,
 		cancel:    cancel,
@@ -193,6 +218,16 @@ func (e *Engine) signal() {
 	case e.wake <- struct{}{}:
 	default:
 	}
+}
+
+// MediaMarker returns the placeholder this model's prompts must contain where media
+// belongs, and whether the model accepts media at all.
+func (e *Engine) MediaMarker() (string, bool) {
+	mb, ok := e.be.(MediaBackend)
+	if !ok {
+		return "", false
+	}
+	return mb.MediaMarker(), true
 }
 
 // Run drives the decode loop until ctx is cancelled. It must be called exactly once, and it
@@ -268,6 +303,33 @@ func (e *Engine) tick(active map[SeqID]*slot) error {
 
 	for _, s := range active {
 		s.batchIdx = -1
+		s.hasLogits = false
+	}
+
+	// Media prefill happens outside the shared batch: it encodes and decodes internally,
+	// then hands back the position to continue from.
+	for seq, s := range active {
+		if s.primed || s.prefilled || len(s.media) == 0 || s.ctx.Err() != nil {
+			continue
+		}
+		mb, ok := e.be.(MediaBackend)
+		if !ok {
+			e.finish(active, seq, "", errors.New("engine: backend cannot accept media"))
+			continue
+		}
+		newPast, err := mb.PrefillMedia(s.seq, 0, s.prompt, s.media, true)
+		if err != nil {
+			e.finish(active, seq, "", fmt.Errorf("media prefill: %w", err))
+			continue
+		}
+		s.pos = newPast
+		s.pending = nil
+		s.prefilled = true
+		s.primed = true
+		// Logits sit on the final position of the prefill, not at an index this loop
+		// assigned, so the sampler is told to read the last one.
+		s.batchIdx = -1
+		s.hasLogits = true
 	}
 
 	// Pass 1 — one decode token per primed slot. These are already resident streams and
@@ -284,6 +346,7 @@ func (e *Engine) tick(active map[SeqID]*slot) error {
 			break
 		}
 		s.batchIdx = idx
+		s.hasLogits = true
 		s.pos++
 	}
 
@@ -302,13 +365,16 @@ func (e *Engine) tick(active map[SeqID]*slot) error {
 			s.pos++
 			if last {
 				s.batchIdx = idx
+				s.hasLogits = true
 				s.primed = true
 			}
 		}
 	}
 
 	if e.be.BatchLen() == 0 {
-		return nil
+		// A media prefill may have produced logits without staging anything in the
+		// shared batch, so there can still be slots to harvest.
+		return e.harvest(active)
 	}
 
 	if err := e.be.Decode(); err != nil {
@@ -327,7 +393,7 @@ func (e *Engine) tick(active map[SeqID]*slot) error {
 // harvest samples each slot that produced logits and emits its token.
 func (e *Engine) harvest(active map[SeqID]*slot) error {
 	for seq, s := range active {
-		if s.batchIdx < 0 {
+		if !s.hasLogits {
 			continue
 		}
 		if s.ctx.Err() != nil {

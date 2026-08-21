@@ -126,6 +126,19 @@ curl localhost:8080/v1/chat/completions -H 'Content-Type: application/json' -d '
 }'
 ```
 
+**Vision** works through the standard content format, for models that ship a projector:
+
+```json
+{"model": "vl", "messages": [{"role": "user", "content": [
+  {"type": "text", "text": "what is this?"},
+  {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}}
+]}]}
+```
+
+Images must be inlined as data URLs. Remote URLs are refused: fetching a caller-supplied URL
+server-side would let anyone reach whatever the server can, including cloud metadata endpoints
+and private networks.
+
 Per-request sampling is honoured — `temperature`, `top_p`, `top_k`, `min_p`, the penalties and
 `seed` layer over the model's manifest defaults, and an explicit `"temperature": 0` means greedy
 rather than "unset".

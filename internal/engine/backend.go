@@ -47,6 +47,23 @@ func (p *SamplingParams) IsZero() bool {
 		p.FreqPenalty == nil && p.PresencePenalty == nil && p.Seed == nil)
 }
 
+// MediaBackend is implemented by backends that accept images or audio.
+//
+// It is a separate interface rather than part of Backend because most models are text-only
+// and should not have to stub a method they cannot perform. The scheduler checks for it and
+// refuses media requests to a backend that lacks it.
+type MediaBackend interface {
+	// PrefillMedia encodes media together with the prompt directly into seq's KV cache,
+	// starting at nPast, and returns the position generation continues from.
+	//
+	// This replaces token-by-token prefill for that request; it batches internally.
+	// Afterwards the sequence decodes through the ordinary loop like any other.
+	PrefillMedia(seq SeqID, nPast Pos, prompt string, media [][]byte, logitsLast bool) (Pos, error)
+
+	// MediaMarker is the placeholder the prompt must contain where media belongs.
+	MediaMarker() string
+}
+
 // Renderer turns messages into the prompt string a specific model expects.
 //
 // Unlike Backend, this is called from request goroutines and must be safe for concurrent

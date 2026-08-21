@@ -93,6 +93,16 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for the reasoning behind each.
 - [ ] Verify llama.cpp MTP/speculative support against a quant that retains `nextn` tensors
 - [ ] Multi-GPU placement and capacity-aware routing
 
+## Model selection
+
+- [ ] **Verify MTP tensors, do not trust the model card.** A file can declare next-token
+      prediction layers in metadata while carrying none of the tensors — the declaration
+      survives quantization even when the weights do not. `llama-herd inspect` reads the
+      declaration cheaply; only a real load with the layers enabled proves they are there.
+- [ ] Note that publishers ship MTP unevenly: the most widely used GGUF repo for one model
+      offers thirty quantizations and MTP for exactly one of them, as a separate module.
+      That unevenness is the argument for building our own.
+
 ## Before publishing models
 
 - [ ] **Check every base model's licence.** Quantized builds inherit the upstream terms, which are
