@@ -1,0 +1,12 @@
+llama-herd
+Copyright (c) 2026 the llama-herd authors
+
+This product includes third-party open-source software. Each component remains under its own
+licence; the list below is regenerated as dependencies change.
+
+  llama.cpp — MIT License — https://github.com/ggml-org/llama.cpp
+  ggml      — MIT License — https://github.com/ggml-org/ggml
+
+Model weights distributed alongside this project are NOT covered by this project's licence. Each
+model carries the licence of its upstream base model, which may impose additional restrictions on
+redistribution and commercial use. See the model card accompanying each published build.
