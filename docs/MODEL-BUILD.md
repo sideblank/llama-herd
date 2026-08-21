@@ -29,6 +29,15 @@ control least. That is the whole argument.
 Vision has the same shape: the projector is a separate export (`--mmproj`), so a vision model
 published without one is text-only regardless of what its weights can do.
 
+## The candidate pool is small
+
+llama.cpp supports **88 model families**. **Seven** of them implement MTP export. Since the
+fastest decode path runs through an MTP head, and that cannot be added to a model that has
+none, those seven are effectively the candidate pool for a published line.
+
+The other 81 can be served perfectly well. They just cannot be one of this project's lines, because
+the reason a line exists is the decode speed MTP buys.
+
 ## What upstream supports
 
 MTP export is implemented per architecture. At the pinned revision it covers:

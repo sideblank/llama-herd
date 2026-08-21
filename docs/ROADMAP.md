@@ -111,6 +111,31 @@ budget rather than a fixed slot count. Levers to pursue, in order of expected va
 4. **KV offload and paging** to host memory for idle streams — costs PCIe bandwidth, buys slots.
 5. **Prefix sharing** across streams with a common prompt, which is close to free when it applies.
 
+## 3b. Many cards: capacity is not throughput
+
+Rented hosts with eight consumer cards are available cheaply, and 8 × 24 GB is 192 GB of
+VRAM — more than a single datacenter card, for less money. That opens models a 24 GB card
+cannot hold. But it buys two different things, and confusing them leads to disappointment.
+
+**Capacity mode — one model split across cards.** Layer splitting puts different layers on
+different cards. Only the hidden state crosses the bus at each boundary, which is tiny next
+to the weights, so this works acceptably over plain PCIe without the fast interconnects
+training requires.
+
+What it does **not** do is multiply throughput. The layers run in sequence, so a token passes
+through card 1, then card 2, and so on: the cards take turns rather than working at once.
+Aggregate throughput lands near a single card's, minus transfer overhead. Eight cards let you
+*run* a model you otherwise could not. They do not make it eight times faster.
+
+**Throughput mode — one model per card.** Eight independent herds, each with its own resident
+weights and decode loop, is genuinely eight times the aggregate throughput, because nothing
+is shared and nothing waits. This is the mode that matches the per-card throughput targets.
+
+The two are composable — four cards holding a large model, four serving a small one — and the
+right split is a property of the workload. What matters is that the manifest expresses it, and
+that a benchmark states which mode produced a number. A capacity-mode figure and a
+throughput-mode figure are not comparable.
+
 ## 4. Multi-GPU and heterogeneous fleets
 
 Not every deployment is one 5090. A stack of 3060s is a legitimate target, as is a mixed host —
