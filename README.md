@@ -93,7 +93,7 @@ code drop.
 [Apache License 2.0](LICENSE). You may use, modify, and redistribute this code, including in
 commercial and closed-source products, subject to the licence terms.
 
-Origin and chain of title for the imported runtime are recorded in
+Origin and chain of title are recorded in
 [PROVENANCE.md](PROVENANCE.md). Contributions are accepted under the same licence, certified by a
 [DCO](.github/DCO) sign-off — see [CONTRIBUTING.md](CONTRIBUTING.md). Contributors keep the
 copyright in their own work; there is no CLA and no copyright assignment.
