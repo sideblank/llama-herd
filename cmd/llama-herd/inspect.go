@@ -45,6 +45,21 @@ func inspect(args []string) int {
 	fmt.Printf("%s\n\n", path)
 	fmt.Printf("  %s\n", m.Summary())
 
+	sh := m.Shape()
+	if sh.Valid() {
+		fmt.Printf("  kv_heads=%d  head_dim=%d/%d", sh.HeadsKV, sh.KeyLength, sh.ValueLength)
+		if sh.Hybrid() {
+			fmt.Printf("  hybrid: %d of %d layers cache (every %d)",
+				sh.KVLayers(), sh.Layers, sh.FullAttentionInterval)
+		}
+		fmt.Printf("\n  KV per token: %.0f KiB at f16, %.0f KiB at q8_0, %.0f KiB at q4_0\n",
+			sh.KVBytesPerToken(llama.KVf16)/1024,
+			sh.KVBytesPerToken(llama.KVq8)/1024,
+			sh.KVBytesPerToken(llama.KVq4)/1024)
+	} else {
+		fmt.Println("  attention geometry incomplete — capacity cannot be computed")
+	}
+
 	if _, err := m.ChatTemplate(); err == nil {
 		fmt.Println("  chat template: present")
 	} else {

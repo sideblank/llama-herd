@@ -98,13 +98,18 @@ func (m *Model) MTP() MTPInfo {
 }
 
 // Summary is a one-line description for logs and reports.
+//
+// The geometry is read from metadata rather than from the model accessors, because those
+// return zero when the file was opened vocab-only — which is exactly how inspection opens it,
+// to avoid paging in tensors.
 func (m *Model) Summary() string {
+	a := m.Architecture()
 	mtp := m.MTP()
 	s := fmt.Sprintf("arch=%s layers=%d embd=%d ctx_train=%d",
-		m.Architecture(),
-		int(C.llama_model_n_layer(m.c)),
-		int(C.llama_model_n_embd(m.c)),
-		int(C.llama_model_n_ctx_train(m.c)))
+		a,
+		m.metaInt(a+".block_count"),
+		m.metaInt(a+".embedding_length"),
+		m.metaInt(a+".context_length"))
 	if mtp.DeclaredLayers > 0 {
 		s += fmt.Sprintf(" mtp_declared=%d", mtp.DeclaredLayers)
 	} else {

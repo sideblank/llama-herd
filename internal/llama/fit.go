@@ -6,6 +6,7 @@ package llama
 import (
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // KVPrecision is the per-element size of the KV cache.
@@ -237,15 +238,47 @@ func (b WeightBudget) Verdict() string {
 }
 
 // ParamCount reads the declared parameter count, or 0 when the file does not state one.
+//
+// Files state this two ways: an exact count, or a human label like "0.5B" or "35B". Both are
+// accepted, since most published quantizations carry only the label.
 func (m *Model) ParamCount() int64 {
-	for _, k := range []string{"general.parameter_count", "general.size_label"} {
-		if v, ok := m.Meta(k); ok {
-			if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
-				return n
-			}
+	if v, ok := m.Meta("general.parameter_count"); ok {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	if v, ok := m.Meta("general.size_label"); ok {
+		if n := parseSizeLabel(v); n > 0 {
+			return n
 		}
 	}
 	return 0
+}
+
+// parseSizeLabel turns "0.5B", "35B", "8x7B" or "700M" into a parameter count.
+func parseSizeLabel(s string) int64 {
+	s = strings.TrimSpace(strings.ToUpper(s))
+	// Mixture labels like "8x7B" describe total parameters as the product.
+	mult := 1.0
+	if i := strings.IndexByte(s, 'X'); i > 0 {
+		if n, err := strconv.ParseFloat(s[:i], 64); err == nil && n > 0 {
+			mult, s = n, s[i+1:]
+		}
+	}
+	var scale float64
+	switch {
+	case strings.HasSuffix(s, "B"):
+		scale, s = 1e9, strings.TrimSuffix(s, "B")
+	case strings.HasSuffix(s, "M"):
+		scale, s = 1e6, strings.TrimSuffix(s, "M")
+	default:
+		return 0
+	}
+	n, err := strconv.ParseFloat(s, 64)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return int64(mult * n * scale)
 }
 
 // GiB renders a byte count for humans.
