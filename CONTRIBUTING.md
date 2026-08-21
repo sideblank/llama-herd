@@ -26,6 +26,12 @@ objects naming infrastructure must never enter the tree. Benchmark *methodology*
 *results* are provider-neutral and belong in `docs/`; the machinery that produced them does
 not.
 
+## Before changing the engine
+
+Read [docs/INVARIANTS.md](docs/INVARIANTS.md). It records the behaviours that fail silently —
+where the system reports success and produces wrong numbers or wrong output. Several are not
+discoverable from the code alone.
+
 ## Commit rules
 
 The policy is an **allow-list**: anything not explicitly permitted is rejected. Nothing in the

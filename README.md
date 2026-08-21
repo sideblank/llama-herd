@@ -165,6 +165,17 @@ cd llama-herd
 
 Releases are CPU-only today; GPU builds are tracked in [LAUNCH.md](LAUNCH.md).
 
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Targets, the reasoning behind them, and the constraints in the way |
+| [docs/INVARIANTS.md](docs/INVARIANTS.md) | Things that are true and were expensive to learn — mostly silent failures |
+| [docs/MODEL-BUILD.md](docs/MODEL-BUILD.md) | How model builds are produced and what each must carry |
+| [docs/BENCHMARKING.md](docs/BENCHMARKING.md) | What each measurement means and how to reproduce it |
+| [PROVENANCE.md](PROVENANCE.md) | Origin and chain of title |
+| [LAUNCH.md](LAUNCH.md) | What remains before this goes public |
+
 ## Building
 
 Requires a Go toolchain and llama.cpp. Header and library locations are not hard-coded — supply
