@@ -267,9 +267,13 @@ func (ctx *Context) Free() {
 	ctx.c = nil
 }
 
-// NCtx is the context size this Context was actually created with, which may differ from
-// what was requested when 0 was passed.
+// NCtx is the total context this Context was created with, shared across all sequences.
+// It may differ from what was requested when 0 was passed.
 func (ctx *Context) NCtx() uint32 { return uint32(C.llama_n_ctx(ctx.c)) }
+
+// NCtxSeq is the context available to a single sequence. This is what one prompt plus its
+// generation must fit inside, and it is what admission should be checked against.
+func (ctx *Context) NCtxSeq() uint32 { return uint32(C.llama_n_ctx_seq(ctx.c)) }
 
 // Decode runs one forward pass over batch.
 //
