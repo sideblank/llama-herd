@@ -4,6 +4,7 @@
 package draft
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/sideblank/llama-herd/internal/engine"
@@ -123,5 +124,50 @@ func TestHistoryIsBounded(t *testing.T) {
 	l.mu.Unlock()
 	if n > 64 {
 		t.Fatalf("history is %d tokens against a bound of 64", n)
+	}
+}
+
+// Accepted proposals must enter history. The engine reports only the token preceding the next
+// draft, so without recording them the drafter matches against text the model never produced
+// and its hit rate decays as a stream runs.
+func TestAcceptedProposalsEnterHistory(t *testing.T) {
+	l := NewLookup(4)
+	l.Seed(0, toks("abcXY------ab"))
+
+	got, _ := l.Draft(0, 'c', 0, 2) // matches "abc", proposes "XY"
+	if str(got) != "XY" {
+		t.Fatalf("proposed %q, want %q", str(got), "XY")
+	}
+
+	// The target kept both.
+	if err := l.Accept(0, 2, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	l.mu.Lock()
+	h := str(l.hist[0])
+	l.mu.Unlock()
+	if !strings.HasSuffix(h, "abcXY") {
+		t.Fatalf("history ends %q; accepted proposals were not recorded", h)
+	}
+}
+
+func TestRejectedProposalsDoNotEnterHistory(t *testing.T) {
+	l := NewLookup(4)
+	l.Seed(0, toks("abcXY------ab"))
+
+	if _, err := l.Draft(0, 'c', 0, 2); err != nil {
+		t.Fatal(err)
+	}
+	// The target rejected everything.
+	if err := l.Accept(0, 0, 'Q'); err != nil {
+		t.Fatal(err)
+	}
+
+	l.mu.Lock()
+	h := str(l.hist[0])
+	l.mu.Unlock()
+	if strings.HasSuffix(h, "XY") {
+		t.Fatalf("history ends %q; rejected proposals were recorded as if produced", h)
 	}
 }

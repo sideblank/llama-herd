@@ -34,6 +34,12 @@ type Lookup struct {
 
 	mu   sync.Mutex
 	hist map[engine.SeqID][]engine.Token
+	// last holds the most recent proposal per sequence, so Accept can append the part
+	// that was kept. Without it, accepted tokens never enter history: the engine only
+	// reports the token preceding the next draft, so any token accepted from a proposal
+	// is skipped, and history drifts further from the real output the longer a stream
+	// runs — quietly reducing the hit rate exactly when context is richest.
+	last map[engine.SeqID][]engine.Token
 }
 
 // NewLookup returns a drafter with sensible defaults.
@@ -49,6 +55,7 @@ func NewLookup(max int) *Lookup {
 		Max:        max,
 		MaxHistory: 1 << 20,
 		hist:       map[engine.SeqID][]engine.Token{},
+		last:       map[engine.SeqID][]engine.Token{},
 	}
 }
 
@@ -67,6 +74,7 @@ func (l *Lookup) Seed(seq engine.SeqID, tokens []engine.Token) {
 	h := make([]engine.Token, len(tokens))
 	copy(h, tokens)
 	l.hist[seq] = l.trim(h)
+	delete(l.last, seq)
 }
 
 // Release drops a finished sequence's history.
@@ -74,6 +82,7 @@ func (l *Lookup) Release(seq engine.SeqID) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.hist, seq)
+	delete(l.last, seq)
 }
 
 func (l *Lookup) trim(h []engine.Token) []engine.Token {
@@ -120,8 +129,10 @@ func (l *Lookup) Draft(seq engine.SeqID, last engine.Token, _ engine.Pos, n int)
 		}
 		out := make([]engine.Token, end-start)
 		copy(out, h[start:end])
+		l.last[seq] = out
 		return out, nil
 	}
+	l.last[seq] = nil
 	return nil, nil
 }
 
@@ -134,13 +145,16 @@ func (l *Lookup) Accept(seq engine.SeqID, accepted int, corrected engine.Token) 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	h := l.hist[seq]
-	if accepted > 0 {
-		// The accepted proposals really were produced, so they belong in history. The
-		// caller already appended the token that preceded them.
-		_ = corrected
+	// Accepted proposals really were emitted, so they belong in history. The engine only
+	// hands back the token preceding the next draft, so without appending them here they
+	// would never be recorded at all.
+	if n := accepted; n > 0 {
+		if p := l.last[seq]; len(p) >= n {
+			l.hist[seq] = l.trim(append(l.hist[seq], p[:n]...))
+		}
 	}
-	l.hist[seq] = l.trim(h)
+	l.last[seq] = nil
+	_ = corrected
 	return nil
 }
 
