@@ -17,7 +17,8 @@
 #   LLAMA_HERD_FLASH_ATTN    flash attention, required by any quantized KV (default: false)
 #   LLAMA_HERD_MMPROJ_URL    multimodal projector, for vision models
 #   LLAMA_HERD_KV_UNIFIED    share one KV pool across streams          (default: false)
-#   LLAMA_HERD_SPEC_TYPE     speculative draft source: none | lookup   (default: none)
+#   LLAMA_HERD_SPEC_TYPE     speculative draft source: none | lookup | mtp  (default: none)
+#                            mtp needs LLAMA_HERD_LOAD_MTP=true and a quant that kept the head
 #   LLAMA_HERD_SPEC_MAX      tokens proposed per step                  (default: 4)
 #   LLAMA_HERD_SPEC_PATTERN  lookup match length                       (default: 3)
 #
@@ -74,11 +75,18 @@ if [ ! -f "$MANIFEST" ]; then
   # context, wasteful where it does not.
   SPEC_JSON=""
   if [ -n "${LLAMA_HERD_SPEC_TYPE:-}" ] && [ "${LLAMA_HERD_SPEC_TYPE}" != "none" ]; then
+    # pattern is the n-gram width lookup matches on and means nothing to a trained head.
+    # Emitting it anyway would put a knob in the generated config that changes nothing,
+    # which is worse than omitting it.
+    SPEC_PATTERN=""
+    if [ "${LLAMA_HERD_SPEC_TYPE}" = "lookup" ]; then
+      SPEC_PATTERN=",
+        \"pattern\": ${LLAMA_HERD_SPEC_PATTERN:-3}"
+    fi
     SPEC_JSON=",
       \"speculation\": {
         \"type\": \"${LLAMA_HERD_SPEC_TYPE}\",
-        \"max_draft\": ${LLAMA_HERD_SPEC_MAX:-4},
-        \"pattern\": ${LLAMA_HERD_SPEC_PATTERN:-3}
+        \"max_draft\": ${LLAMA_HERD_SPEC_MAX:-4}${SPEC_PATTERN}
       }"
   fi
 
