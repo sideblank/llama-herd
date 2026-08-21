@@ -85,7 +85,10 @@ upstream describes as work in progress, permits breaking changes and C++ in, is 
 by the build, and asks callers not to include it. The public header exposes only the layer
 count.
 
-That leaves three routes, and the choice matters more than the code:
+**Route 1 was taken and is built.** `shim/lhspec.{h,cpp}` wraps upstream's
+`common_speculative` behind a C ABI, and `internal/llama/speculative.go` drives it as an
+ordinary `engine.Drafter`. Set `"speculation": {"type": "mtp"}` alongside `"load_mtp": true`
+and the model's own head supplies the drafts. The three routes considered were:
 
 1. **Link llama.cpp's common library and wrap its speculative implementation.** This is what
    upstream's own server does, and it covers all three MTP architectures rather than one. It
@@ -100,9 +103,13 @@ That leaves three routes, and the choice matters more than the code:
    and on any model, but the draft weights cost VRAM that an MTP head does not, which is
    exactly the advantage MTP was chosen for.
 
-Route 3 is implementable now and is the sane first step: it makes the draft-verify loop real
-and measurable against any model, and the loop is the same regardless of where drafts come
-from. Route 1 then swaps the draft source once the loop exists.
+That order held. A zero-VRAM lookup drafter made the loop real and measurable first, and
+route 1 then swapped the draft source into a loop that was already tested — which is why the
+MTP work was a binding rather than a feature.
+
+Route 2 was rejected for the reason it deserves naming: the failure mode of this feature is
+already "loaded and doing nothing", and an unstable header would add a second way to arrive
+there silently.
 
 **The draft-verify loop is built.** The engine stages a stream's next token together with
 whatever a drafter proposes, verifies every position in one forward pass, accepts the longest
@@ -124,16 +131,24 @@ Three properties it holds, each tested:
 The draft source is abstract on purpose: a companion model, a trained head, or an n-gram cache
 all produce candidate tokens, and the loop does not care which.
 
+Two sources ship today. **Lookup** predicts from the sequence's own context, costs no memory,
+and fires only where output repeats input. **MTP** uses the model's own head, works on output
+that repeats nothing, and costs the memory that head occupies. They are complementary rather
+than ranked, and `llama_herd_draft_acceptance_rate` is what decides between them for a given
+traffic shape.
+
 Work items:
 
-- **A draft-model source** using public API, which works today on any model.
-- **An MTP source**, once the drafting API is reachable — this is now a component swap rather
-  than a feature build.
+- Measure accept rate and end-to-end speedup per model and per card. This is the open
+  question: the loop is built and the sources work, but what MTP buys on top of ordinary
+  four-stream batching is a measurement, not a prediction.
 - Decide how a draft context shares the KV budget. It is a second context over the same
   weights, so its cache competes with the target's for the same VRAM.
-- Confirm `load_mtp` finds the tensors in each candidate quant, which is already measurable.
-- Measure accept rate and the real end-to-end speedup, per model and per card.
-- Fall back to draft-model speculative decoding where a model has no native MTP head.
+- Confirm `load_mtp` finds the tensors in each candidate quant, which `llama-herd inspect`
+  already reports.
+- **A draft-model source** using public API, for models with no native head at all. Lookup
+  covers that case for repetitive traffic; a companion model would cover the rest, at the
+  VRAM cost that MTP exists to avoid.
 
 ## 3. Long context, and the constraint that bites
 
