@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 )
@@ -109,6 +110,9 @@ type Engine struct {
 	wake chan struct{}
 
 	drafter Drafter
+	// observeFailed records that the drafter already reported an observation failure, so
+	// the warning appears once rather than on every pass for the life of the process.
+	observeFailed bool
 
 	closed bool
 
@@ -441,7 +445,15 @@ func (e *Engine) tick(active map[SeqID]*slot) error {
 	// target has produced it.
 	decodeErr := e.be.Decode()
 	if ob, ok := e.drafter.(BatchObserver); ok && ob != nil && decodeErr == nil {
-		_ = ob.ObserveDecode()
+		// A failure here is not fatal — the target decoded fine and the answer is correct
+		// — but it leaves the drafter predicting from stale state, which shows up only as
+		// acceptance decaying. Swallowing it silently reproduces the failure the observer
+		// exists to prevent, so say it once rather than every pass.
+		if err := ob.ObserveDecode(); err != nil && !e.observeFailed {
+			e.observeFailed = true
+			log.Printf("engine: drafter could not observe a decode (%v) — speculation will "+
+				"work from stale state and acceptance will fall; further such errors are silent", err)
+		}
 	}
 	if err := decodeErr; err != nil {
 		if errors.Is(err, ErrNoKVSlot) {
