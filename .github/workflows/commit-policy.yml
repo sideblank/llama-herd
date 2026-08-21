@@ -44,11 +44,12 @@ jobs:
       - name: Verify hooks and ignore rules are intact
         run: |
           set -euo pipefail
-          for f in .githooks/commit-msg .githooks/pre-commit .gitignore; do
+          for f in .githooks/commit-msg .githooks/pre-commit .githooks/pre-push .gitignore scripts/check-commits.sh; do
             test -f "$f" || { echo "missing required file: $f"; exit 1; }
           done
           test -x .githooks/commit-msg  || { echo ".githooks/commit-msg is not executable"; exit 1; }
           test -x .githooks/pre-commit  || { echo ".githooks/pre-commit is not executable"; exit 1; }
+          test -x .githooks/pre-push    || { echo ".githooks/pre-push is not executable"; exit 1; }
           grep -qxF 'CLAUDE.md' .gitignore || { echo ".gitignore no longer ignores CLAUDE.md"; exit 1; }
           grep -qxF '.claude/'  .gitignore || { echo ".gitignore no longer ignores .claude/"; exit 1; }
           echo "guards intact"
