@@ -126,6 +126,20 @@ speculation.
 strip it silently, so a manifest asking for `mtp` against such a file is a configuration mistake
 worth naming — not a reason to deny service. Log the cause and serve without drafting.
 
+**A draft context has its own KV cache and must be budgeted for.** Speculating from a model's
+own head opens a second context over the same weights. The weights are not duplicated, but the
+cache is, and it is charged at the target's context length. Nothing shares it automatically:
+`ctx_other` is wired for only a few architectures, and for the rest the draft context allocates
+independently.
+
+**Build the draft context from the target's geometry, never from defaults.** An unset context
+size means *the length the model was trained with*, and unset cache types mean f16 whatever the
+target quantized to. On a long-context model those compound into an allocation that fails on a
+card the target fits comfortably. Worse, the failure returns a null context — the same signal a
+model with no prediction head gives — so the runtime blames the quantization for a
+misconfiguration of its own. Measured: a 3090 left with 0.8 GiB free, loading cleanly and dying
+on the first full batch.
+
 **Wrap the maintained speculation surface rather than the internal one.** Driving a head
 directly needs `llama_get_embeddings_nextn` from a staging header that upstream does not install
 and asks callers not to include. `common_speculative` covers all three MTP architectures and
