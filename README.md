@@ -145,22 +145,42 @@ per-stream ceiling that no longer reserves anything, so concurrent long requests
 overcommit the pool and be evicted mid-answer. The tested arrangement is a fixed herd of equal
 streams.
 
-**Speculative decoding** is available and costs no memory. Lookup drafting predicts from the
-sequence's own context — the prompt included — and proposes continuations that are verified in
-the same forward pass:
+**Speculative decoding** comes in two forms. Both propose continuations that the target
+verifies in the same forward pass, and both are safe: a rejected proposal costs batch space and
+never a token, because the token at a divergence is the model's own choice. Neither changes
+what the model would have said.
+
+*Lookup drafting* predicts from the sequence's own context — the prompt included — and costs no
+memory at all:
 
 ```json
 "speculation": { "type": "lookup", "max_draft": 4, "pattern": 3 }
 ```
 
 It contributes where output repeats context, which is most of what an agent does: editing a
-file that is in the prompt, filling a schema, continuing a transcript. On repetitive content
-it reaches high acceptance; on free-form prose it finds no match and proposes nothing. A
-rejected proposal costs batch space and never a token, since the token at a divergence is the
-model's own choice.
+file that is in the prompt, filling a schema, continuing a transcript. On repetitive content it
+reaches high acceptance; on free-form prose it finds no match and proposes nothing.
 
-`GET /metrics` reports `llama_herd_draft_acceptance_rate`, which is the number that says
-whether it is earning that batch space.
+*MTP drafting* uses the model's own trained prediction head, so it works on output that repeats
+nothing — free-form prose included — at the cost of the memory that head occupies:
+
+```json
+"load_mtp": true,
+"speculation": { "type": "mtp", "max_draft": 4 }
+```
+
+It requires a model that carries such a head **and** a quantization that kept it. Many published
+quantizations drop it silently, which is why `llama-herd inspect` reports the MTP layer count and
+why a model configured for `mtp` that cannot draft logs the reason and serves without it rather
+than refusing to start.
+
+The two are complementary rather than ranked — lookup is free but narrow, MTP is general but
+resident — so pick by what your traffic looks like, and confirm the pick by measurement:
+
+`GET /metrics` reports `llama_herd_draft_acceptance_rate`, which is the number that says whether
+either is earning its batch space. **A model whose head is loaded and whose acceptance is zero
+is the failure worth catching:** the head is occupying VRAM and contributing nothing, and no
+other signal distinguishes that from working speculation.
 
 Per-request sampling is honoured — `temperature`, `top_p`, `top_k`, `min_p`, the penalties and
 `seed` layer over the model's manifest defaults, and an explicit `"temperature": 0` means greedy

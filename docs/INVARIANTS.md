@@ -116,6 +116,22 @@ speculating stream overrun the batch, which the backend rejects outright.
 **A drafter holds per-sequence state and must be released** when a slot finishes, for the same
 reason a sampler is reset.
 
+**Loading a prediction head is not driving one.** `load_mtp` makes the head resident; it does
+not make anything propose from it. The runtime ran for weeks reporting `mtp_loaded=true` with
+zero drafts — the head was occupying VRAM and contributing nothing, and every signal except the
+draft counters looked healthy. Treat `mtp_loaded` as a statement about memory, never about
+speculation.
+
+**A quantization that dropped the head must degrade, not refuse.** Many published quantizations
+strip it silently, so a manifest asking for `mtp` against such a file is a configuration mistake
+worth naming — not a reason to deny service. Log the cause and serve without drafting.
+
+**Wrap the maintained speculation surface rather than the internal one.** Driving a head
+directly needs `llama_get_embeddings_nextn` from a staging header that upstream does not install
+and asks callers not to include. `common_speculative` covers all three MTP architectures and
+moves with them; pinning to the internal surface buys a working prototype and a breakage on the
+next update.
+
 ## Vision
 
 **The prompt must contain the media marker.** Without it the tokenizer produces chunks with no
