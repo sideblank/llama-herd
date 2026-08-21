@@ -444,3 +444,68 @@ func TestMetricsExposition(t *testing.T) {
 		t.Errorf("request counter did not increment:\n%s", body)
 	}
 }
+
+// A device being present is not the same as the model running on it. Offload can be
+// configured off or fail, and the server then reports an accelerator while working on CPU —
+// which reads as a slow GPU rather than an unused one.
+func TestGPUPresentButModelOnCPUIsWarned(t *testing.T) {
+	f := enginetest.New(2, 32, "hi")
+	reg := engine.NewRegistry()
+	if err := reg.Add("m", engine.New(f, engine.Config{}), echoRenderer{}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(reg).
+		WithDevices(func() []DeviceInfo {
+			return []DeviceInfo{{Index: 0, Name: "GPU", Type: "gpu", TotalBytes: 24 << 30}}
+		}).
+		WithPlacement("m", func() Placement {
+			return Placement{GPULayersRequested: 0, LayersTotal: 32, OnGPU: false}
+		})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/v1/info")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var got Info
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Accelerated {
+		t.Error("a GPU device is present, so accelerated should be true")
+	}
+	if got.Warning == "" || !strings.Contains(got.Warning, "running on CPU") {
+		t.Fatalf("a GPU present with the model on CPU must warn; got %q", got.Warning)
+	}
+	if got.Models[0].Placement == nil || got.Models[0].Placement.OnGPU {
+		t.Error("placement should report the model is not on the GPU")
+	}
+}
+
+func TestModelOnGPUProducesNoWarning(t *testing.T) {
+	f := enginetest.New(2, 32, "hi")
+	reg := engine.NewRegistry()
+	if err := reg.Add("m", engine.New(f, engine.Config{}), echoRenderer{}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(reg).
+		WithDevices(func() []DeviceInfo {
+			return []DeviceInfo{{Index: 0, Name: "GPU", Type: "gpu", TotalBytes: 24 << 30}}
+		}).
+		WithPlacement("m", func() Placement {
+			return Placement{GPULayersRequested: -1, LayersTotal: 32, OnGPU: true}
+		})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, _ := http.Get(ts.URL + "/v1/info")
+	defer resp.Body.Close()
+	var got Info
+	_ = json.NewDecoder(resp.Body).Decode(&got)
+	if got.Warning != "" {
+		t.Fatalf("no warning expected when the model is on the GPU, got %q", got.Warning)
+	}
+}

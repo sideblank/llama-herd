@@ -112,6 +112,14 @@ failure appears only when the image is run.
 **Compile the CPU backend for a generic instruction set.** Building for the build machine's
 CPU faults on any older machine the container is scheduled onto.
 
+**Ship the base CUDA image, not the runtime one.** The runtime image carries about 2.8 GB of
+libraries; static inspection shows the CUDA backend names only the runtime, cuBLAS and NCCL,
+plus the host driver. Copying just those halves the image.
+
+This is a reliability property, not only a speed one: a scheduled worker cold-pulls the whole
+image before the container starts, so a smaller image is a shorter window in which a spot node
+can vanish mid-pull.
+
 **Never use `ldd` in a build.** It executes the target's ELF interpreter, which silently
 no-ops under emulation — printing nothing, copying no dependencies, and making the gate pass
 vacuously. Use static inspection.

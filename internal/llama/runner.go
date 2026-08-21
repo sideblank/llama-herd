@@ -29,6 +29,13 @@ type Runner struct {
 	nVocab int32
 	eos    Token
 
+	// Recorded at load so the server can report how this model was configured.
+	gpuLayers int32
+	kvTypeK   string
+	kvTypeV   string
+	flashAttn bool
+	loadMTP   bool
+
 	// defaultSampling is the model's configured sampling, restored whenever a request
 	// asks for nothing specific.
 	defaultSampling SamplingParams
@@ -44,6 +51,20 @@ type Runner struct {
 	// is what makes RenderChat safe to call from request goroutines while the decode
 	// loop is running.
 	chatTmpl string
+}
+
+// kvName renders a KV cache type for reporting.
+func kvName(t GGMLType) string {
+	switch t {
+	case TypeQ8_0:
+		return "q8_0"
+	case TypeQ5_1:
+		return "q5_1"
+	case TypeQ4_0:
+		return "q4_0"
+	default:
+		return "f16"
+	}
 }
 
 // Compile-time proof that Runner satisfies the scheduler's interface. Without this the
@@ -94,6 +115,11 @@ func OpenRunner(cfg RunnerConfig) (*Runner, error) {
 		vocab:           vocab,
 		nVocab:          nVocab,
 		eos:             vocab.EOS(),
+		gpuLayers:       cfg.Model.NGPULayers,
+		kvTypeK:         kvName(cfg.Context.TypeK),
+		kvTypeV:         kvName(cfg.Context.TypeV),
+		flashAttn:       cfg.Context.FlashAttn,
+		loadMTP:         cfg.Model.LoadMTP,
 		samplers:        make([]*Sampler, nSeq),
 		custom:          make([]bool, nSeq),
 		defaultSampling: cfg.Sampling,
@@ -199,6 +225,43 @@ func (r *Runner) LibraryPerf(_ uint64) bench.LibraryPerf {
 
 // ResetLibraryPerf clears the library counters.
 func (r *Runner) ResetLibraryPerf() { r.ctx.PerfReset() }
+
+// PlacementInfo describes where this runner's weights went and how the context is configured.
+//
+// The key field is OnGPU. A device existing does not mean the model reached it: a manifest can
+// ask for zero offload, or offload can fail, and the server then reports an accelerator while
+// doing the work on CPU. That presents as a mysteriously slow GPU rather than an unused one.
+type PlacementInfo struct {
+	GPULayersRequested int32
+	LayersTotal        int32
+	OnGPU              bool
+	ContextTotal       uint32
+	ContextPerSeq      uint32
+	BatchSize          uint32
+	KVTypeK            string
+	KVTypeV            string
+	FlashAttn          bool
+	MTPLoaded          bool
+}
+
+// PlacementInfo reports how this model was loaded.
+func (r *Runner) PlacementInfo() PlacementInfo {
+	sh := r.model.Shape()
+	return PlacementInfo{
+		GPULayersRequested: r.gpuLayers,
+		LayersTotal:        int32(sh.Layers),
+		// Any non-zero offload request means weights were placed on a device; zero means
+		// the model is entirely on CPU whatever hardware is present.
+		OnGPU:         r.gpuLayers != 0,
+		ContextTotal:  r.ctx.NCtx(),
+		ContextPerSeq: r.ctx.NCtxSeq(),
+		BatchSize:     uint32(r.batch.Cap()),
+		KVTypeK:       r.kvTypeK,
+		KVTypeV:       r.kvTypeV,
+		FlashAttn:     r.flashAttn,
+		MTPLoaded:     r.loadMTP,
+	}
+}
 
 // Summary describes the loaded model, including what it declares about MTP.
 func (r *Runner) Summary() string { return r.model.Summary() }

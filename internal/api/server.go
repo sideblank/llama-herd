@@ -21,12 +21,13 @@ type Clock func() time.Time
 
 // Server exposes a registry over HTTP.
 type Server struct {
-	reg     *engine.Registry
-	now     Clock
-	seq     atomic.Uint64
-	idPfx   string
-	devices Devices
-	build   BuildInfo
+	reg        *engine.Registry
+	now        Clock
+	seq        atomic.Uint64
+	idPfx      string
+	devices    Devices
+	build      BuildInfo
+	placements map[string]func() Placement
 }
 
 // BuildInfo describes the running binary.
@@ -41,6 +42,16 @@ func (s *Server) WithDevices(d Devices) *Server { s.devices = d; return s }
 
 // WithBuild makes the server report which build is running.
 func (s *Server) WithBuild(b BuildInfo) *Server { s.build = b; return s }
+
+// WithPlacement records how one model was loaded, so the server can report whether the
+// weights actually reached an accelerator.
+func (s *Server) WithPlacement(model string, f func() Placement) *Server {
+	if s.placements == nil {
+		s.placements = map[string]func() Placement{}
+	}
+	s.placements[model] = f
+	return s
+}
 
 // New builds a server over reg.
 func New(reg *engine.Registry) *Server {
@@ -132,6 +143,37 @@ type ModelStatus struct {
 	OK    bool          `json:"ok"`
 	Error string        `json:"error,omitempty"`
 	Stats *engine.Stats `json:"stats,omitempty"`
+
+	// Placement records where this model's weights actually went.
+	//
+	// A device being present is not the same as the model running on it. Layers can fail
+	// to offload, or be configured not to, and the server then reports an accelerator
+	// while doing the work on CPU — which looks like a mysteriously slow GPU rather than
+	// a model that never reached it.
+	Placement *Placement `json:"placement,omitempty"`
+}
+
+// Placement describes how a model was loaded.
+type Placement struct {
+	// GPULayersRequested is what the manifest asked for; -1 means all.
+	GPULayersRequested int32 `json:"gpu_layers_requested"`
+	// LayersTotal is the model's layer count.
+	LayersTotal int32 `json:"layers_total"`
+	// OnGPU is false when the weights are on CPU regardless of what devices exist.
+	OnGPU bool `json:"on_gpu"`
+
+	ContextTotal  uint32 `json:"context_total"`
+	ContextPerSeq uint32 `json:"context_per_stream"`
+	BatchSize     uint32 `json:"batch_size"`
+	KVTypeK       string `json:"kv_type_k"`
+	KVTypeV       string `json:"kv_type_v"`
+	FlashAttn     bool   `json:"flash_attention"`
+	MTPLoaded     bool   `json:"mtp_loaded"`
+}
+
+// PlacementSource is implemented by a backend that can describe where its weights went.
+type PlacementSource interface {
+	Placement() Placement
 }
 
 // snapshot builds the current Info.
@@ -148,14 +190,6 @@ func (s *Server) snapshot() Info {
 			in.Accelerated = true
 		}
 	}
-	if !in.Accelerated {
-		in.Warning = "no dedicated-memory GPU found — this process is running on CPU. " +
-			"Requests will be answered correctly but far more slowly."
-	} else if in.Host.Oversubscribed() {
-		in.Warning = "the machine is loaded beyond its core count, so throughput will be " +
-			"well below what this hardware can do, for reasons unrelated to the model."
-	}
-
 	health := s.reg.Health()
 	for _, name := range s.reg.Names() {
 		ms := ModelStatus{Name: name, OK: health[name] == nil}
@@ -166,9 +200,45 @@ func (s *Server) snapshot() Info {
 			st := eng.Stats()
 			ms.Stats = &st
 		}
+		if p, ok := s.placements[name]; ok {
+			pp := p()
+			ms.Placement = &pp
+		}
 		in.Models = append(in.Models, ms)
 	}
+
+	// Computed last, because the placement check needs the model list. Ordered by
+	// severity: no accelerator at all, then an accelerator the weights never reached,
+	// then a machine too busy to use what it has.
+	switch offloaded, total := placementSummary(in.Models); {
+	case !in.Accelerated:
+		in.Warning = "no dedicated-memory GPU found — this process is running on CPU. " +
+			"Requests will be answered correctly but far more slowly."
+	case total > 0 && offloaded < total:
+		in.Warning = fmt.Sprintf(
+			"a GPU is present but %d of %d model(s) are running on CPU — the accelerator was "+
+				"found and the weights did not reach it, which reads as a slow GPU rather than "+
+				"an unused one.", total-offloaded, total)
+	case in.Host.Oversubscribed():
+		in.Warning = "the machine is loaded beyond its core count, so throughput will be " +
+			"well below what this hardware can do, for reasons unrelated to the model."
+	}
+
 	return in
+}
+
+// placementSummary counts how many models actually reached an accelerator.
+func placementSummary(ms []ModelStatus) (onGPU, total int) {
+	for _, m := range ms {
+		if m.Placement == nil {
+			continue
+		}
+		total++
+		if m.Placement.OnGPU {
+			onGPU++
+		}
+	}
+	return onGPU, total
 }
 
 // info reports the build and the hardware in use.

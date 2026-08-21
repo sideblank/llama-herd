@@ -118,10 +118,26 @@ RUN go build -trimpath \
       -o /out/bin/llama-herd ./cmd/llama-herd
 
 # --- runtime ---------------------------------------------------------------------------
-FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION}
+# The base image, not the runtime image. The runtime image ships about 2.8 GB of CUDA
+# libraries; static inspection of the CUDA backend shows it names only the runtime, cuBLAS
+# and NCCL, plus the host driver supplied at run time. cuFFT, cuSPARSE, cuSOLVER, cuRAND,
+# NPP, nvJPEG and OpenCL are never loaded.
+#
+# This matters beyond disk. A scheduled worker cold-pulls the whole image before the
+# container starts, so a smaller image is a shorter window in which a spot node can vanish
+# mid-pull — which is a reliability property, not just a speed one.
+FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu${UBUNTU_VERSION}
 
-# libgomp1 is required, not optional: ggml's CPU backend links OpenMP, and the CUDA
-# runtime base does not ship it. Without it the binary dies at startup with
+# Exactly the CUDA libraries the backend names, with their SONAME symlinks preserved so the
+# links stay links rather than becoming three copies of each library.
+COPY --from=llama /usr/local/cuda/lib64/libcudart.so* /usr/local/cuda/lib64/
+COPY --from=llama /usr/local/cuda/lib64/libcublas.so* /usr/local/cuda/lib64/
+COPY --from=llama /usr/local/cuda/lib64/libcublasLt.so* /usr/local/cuda/lib64/
+COPY --from=llama /usr/lib/x86_64-linux-gnu/libnccl.so* /usr/lib/x86_64-linux-gnu/
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+
+# libgomp1 is required, not optional: ggml's CPU backend links OpenMP, and no CUDA base
+# ships it. Without it the binary dies at startup with
 # "libgomp.so.1: cannot open shared object file" — a failure that only appears when the
 # image is actually run, never during the build.
 RUN apt-get update && apt-get install -y --no-install-recommends \

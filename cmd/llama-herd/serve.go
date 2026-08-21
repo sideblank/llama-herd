@@ -176,21 +176,42 @@ func serve(args []string) int {
 
 	reg.Start(ctx)
 
+	apiSrv := api.New(reg).
+		WithBuild(api.BuildInfo{Version: version, Commit: commit, LlamaCppRef: llamaCppRef}).
+		WithDevices(func() []api.DeviceInfo {
+			var out []api.DeviceInfo
+			for _, d := range llama.Devices() {
+				out = append(out, api.DeviceInfo{
+					Index: d.Index, Name: d.Name, Type: d.Type.String(),
+					TotalBytes: d.TotalBytes, FreeBytes: d.FreeBytes,
+					Description: d.Description,
+				})
+			}
+			return out
+		})
+
+	for i, mm := range mf.Models {
+		r := runners[i]
+		apiSrv = apiSrv.WithPlacement(mm.Name, func() api.Placement {
+			p := r.PlacementInfo()
+			return api.Placement{
+				GPULayersRequested: p.GPULayersRequested,
+				LayersTotal:        p.LayersTotal,
+				OnGPU:              p.OnGPU,
+				ContextTotal:       p.ContextTotal,
+				ContextPerSeq:      p.ContextPerSeq,
+				BatchSize:          p.BatchSize,
+				KVTypeK:            p.KVTypeK,
+				KVTypeV:            p.KVTypeV,
+				FlashAttn:          p.FlashAttn,
+				MTPLoaded:          p.MTPLoaded,
+			}
+		})
+	}
+
 	srv := &http.Server{
-		Addr: mf.Listen,
-		Handler: api.New(reg).
-			WithBuild(api.BuildInfo{Version: version, Commit: commit, LlamaCppRef: llamaCppRef}).
-			WithDevices(func() []api.DeviceInfo {
-				var out []api.DeviceInfo
-				for _, d := range llama.Devices() {
-					out = append(out, api.DeviceInfo{
-						Index: d.Index, Name: d.Name, Type: d.Type.String(),
-						TotalBytes: d.TotalBytes, FreeBytes: d.FreeBytes,
-						Description: d.Description,
-					})
-				}
-				return out
-			}).Handler(),
+		Addr:    mf.Listen,
+		Handler: apiSrv.Handler(),
 		// No write timeout: a streaming response is long-lived by design, and a
 		// deadline here would sever generations mid-flight.
 		ReadHeaderTimeout: 10 * time.Second,
