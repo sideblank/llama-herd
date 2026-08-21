@@ -55,6 +55,21 @@ type Model struct {
 	// LoadMTP loads multi-token-prediction layers when the file carries them.
 	LoadMTP bool `json:"load_mtp,omitempty"`
 
+	// KVTypeK and KVTypeV set the KV cache precision, separately for keys and values.
+	// One of f16, q8_0, q5_1, q4_0.
+	//
+	// Keys tolerate quantization less well than values, so K at q8 with V at q4 is often
+	// a better trade than putting both at the same level — it saves a quarter of the
+	// cache for less quality cost. That combination needs flash attention AND a build
+	// with all flash-attention quant kernels compiled; without them it falls off the fast
+	// path silently.
+	KVTypeK string `json:"kv_type_k,omitempty"`
+	KVTypeV string `json:"kv_type_v,omitempty"`
+
+	// FlashAttention is required by any quantized KV type. Leaving it off with a
+	// quantized cache does not work.
+	FlashAttention bool `json:"flash_attention,omitempty"`
+
 	// KVUnified shares one attention buffer across streams rather than giving each its
 	// own. Worth measuring both ways: streams fanned out from a common prompt share a
 	// large prefix and benefit, while unrelated requests generally do not.
@@ -169,6 +184,21 @@ func (m *Manifest) Validate() error {
 		}
 		if mm.Context == 0 {
 			problems = append(problems, where+": context is required")
+		}
+
+		for label, v := range map[string]string{"kv_type_k": mm.KVTypeK, "kv_type_v": mm.KVTypeV} {
+			switch v {
+			case "", "f16", "q8_0", "q5_1", "q4_0":
+			default:
+				problems = append(problems, fmt.Sprintf(
+					"%s: %s %q is not one of f16, q8_0, q5_1, q4_0", where, label, v))
+			}
+		}
+		if (mm.KVTypeK != "" && mm.KVTypeK != "f16") || (mm.KVTypeV != "" && mm.KVTypeV != "f16") {
+			if !mm.FlashAttention {
+				problems = append(problems, where+
+					": quantized KV requires flash_attention — without it the setting does not work")
+			}
 		}
 
 		switch mm.SplitMode {

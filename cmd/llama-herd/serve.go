@@ -75,6 +75,13 @@ func runnerConfig(m manifest.Model) llama.RunnerConfig {
 	cp.NUBatch = m.Batch
 	cp.NSeqMax = m.Streams
 	cp.KVUnified = m.KVUnified
+	cp.FlashAttn = m.FlashAttention
+	if t, ok := llama.ParseGGMLType(m.KVTypeK); ok {
+		cp.TypeK = t
+	}
+	if t, ok := llama.ParseGGMLType(m.KVTypeV); ok {
+		cp.TypeV = t
+	}
 	if m.Threads > 0 {
 		cp.NThreads = m.Threads
 	}

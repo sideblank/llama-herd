@@ -11,9 +11,29 @@ ARG UBUNTU_VERSION=22.04
 ARG LLAMA_CPP_REF=b10545
 ARG GO_VERSION=1.24.0
 
+# Decode-speed build options. Upstream defaults are conservative; these are the levers that
+# matter for a multi-stream decode loop, and each is switchable so they can be A/B measured
+# rather than assumed.
+#
+# CUDA_GRAPHS: upstream default OFF. A decode loop is thousands of small kernel launches per
+#   second, and graphs replay a captured launch sequence instead of re-issuing each one. The
+#   benefit is largest exactly where this engine operates — many streams, little work per step.
+# FA_ALL_QUANTS: upstream default OFF, which compiles flash-attention kernels only for
+#   MATCHED pairs (f16/f16, q4_0/q4_0, q8_0/q8_0, bf16/bf16). Mixed K and V precision — K at
+#   q8 and V at q4, which saves a quarter of the cache since V tolerates less precision than
+#   K — has no kernel without this and silently falls off the fast path.
+# FORCE_MMQ: quantized matmul without a separate dequantization pass. Genuinely a trade
+#   rather than a win, so it stays at the upstream default and is left to measurement.
+ARG GGML_CUDA_GRAPHS=ON
+ARG GGML_CUDA_FA_ALL_QUANTS=ON
+ARG GGML_CUDA_FORCE_MMQ=OFF
+
 # --- llama.cpp -------------------------------------------------------------------------
 FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION} AS llama
 ARG LLAMA_CPP_REF
+ARG GGML_CUDA_GRAPHS
+ARG GGML_CUDA_FA_ALL_QUANTS
+ARG GGML_CUDA_FORCE_MMQ
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git cmake build-essential ca-certificates \
@@ -44,6 +64,9 @@ RUN cmake -S /src/llama.cpp -B /src/build \
       -DGGML_BACKEND_DL=ON \
       -DGGML_NATIVE=OFF \
       -DGGML_CUDA=ON \
+      -DGGML_CUDA_GRAPHS=${GGML_CUDA_GRAPHS} \
+      -DGGML_CUDA_FA_ALL_QUANTS=${GGML_CUDA_FA_ALL_QUANTS} \
+      -DGGML_CUDA_FORCE_MMQ=${GGML_CUDA_FORCE_MMQ} \
       -DCMAKE_CUDA_ARCHITECTURES="86;89;120" \
       -DLLAMA_BUILD_COMMON=OFF \
       -DLLAMA_BUILD_TESTS=OFF \

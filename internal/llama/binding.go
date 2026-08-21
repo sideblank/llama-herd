@@ -93,6 +93,32 @@ type ModelParams struct {
 	LoadMTP bool
 }
 
+// GGMLType identifies a tensor element type, used here for KV cache precision.
+type GGMLType int32
+
+const (
+	TypeF16  GGMLType = C.GGML_TYPE_F16
+	TypeQ8_0 GGMLType = C.GGML_TYPE_Q8_0
+	TypeQ5_1 GGMLType = C.GGML_TYPE_Q5_1
+	TypeQ4_0 GGMLType = C.GGML_TYPE_Q4_0
+)
+
+// ParseGGMLType maps a manifest string to a type. An empty string means f16.
+func ParseGGMLType(s string) (GGMLType, bool) {
+	switch s {
+	case "", "f16":
+		return TypeF16, true
+	case "q8_0":
+		return TypeQ8_0, true
+	case "q5_1":
+		return TypeQ5_1, true
+	case "q4_0":
+		return TypeQ4_0, true
+	default:
+		return TypeF16, false
+	}
+}
+
 // SplitMode selects how a model is distributed across devices.
 type SplitMode int32
 
@@ -206,6 +232,19 @@ type ContextParams struct {
 	Embeddings bool
 	// OffloadKQV places the KV cache and attention ops on the GPU.
 	OffloadKQV bool
+	// TypeK and TypeV are the KV cache element types. Keys tolerate quantization less
+	// well than values, so an asymmetric pair — keys at q8, values at q4 — is often a
+	// better trade than one level for both.
+	//
+	// Any quantized type requires FlashAttn. An asymmetric pair additionally requires a
+	// build with all flash-attention quant kernels compiled; the default build carries
+	// only matched pairs.
+	TypeK GGMLType
+	TypeV GGMLType
+
+	// FlashAttn enables flash attention, which quantized KV requires.
+	FlashAttn bool
+
 	// KVUnified selects one attention buffer shared across sequences instead of a
 	// per-sequence one.
 	//
@@ -242,6 +281,9 @@ func DefaultContextParams() ContextParams {
 		NThreadsBatch: int32(c.n_threads_batch),
 		Embeddings:    bool(c.embeddings),
 		OffloadKQV:    bool(c.offload_kqv),
+		TypeK:         GGMLType(c.type_k),
+		TypeV:         GGMLType(c.type_v),
+		FlashAttn:     c.flash_attn_type != C.LLAMA_FLASH_ATTN_TYPE_DISABLED,
 		KVUnified:     bool(c.kv_unified),
 		CtxType:       ContextType(c.ctx_type),
 	}
@@ -257,6 +299,11 @@ func (p ContextParams) c() C.struct_llama_context_params {
 	c.n_threads_batch = C.int32_t(p.NThreadsBatch)
 	c.embeddings = C.bool(p.Embeddings)
 	c.offload_kqv = C.bool(p.OffloadKQV)
+	c.type_k = C.enum_ggml_type(p.TypeK)
+	c.type_v = C.enum_ggml_type(p.TypeV)
+	if p.FlashAttn {
+		c.flash_attn_type = C.LLAMA_FLASH_ATTN_TYPE_ENABLED
+	}
 	c.kv_unified = C.bool(p.KVUnified)
 	c.ctx_type = C.enum_llama_context_type(p.CtxType)
 	return c
