@@ -64,3 +64,6 @@ jobs:
           test ! -s /tmp/unformatted || { echo "gofmt found unformatted files"; exit 1; }
           go vet ./...
           go build ./...
+          # The scheduler is backend-agnostic on purpose, so its tests run on every
+          # platform with no GPU and no model present.
+          go test ./... -race -count=1
