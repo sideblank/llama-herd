@@ -383,6 +383,7 @@ func (e *Engine) tick(active map[SeqID]*slot) error {
 		return e.harvest(active)
 	}
 
+	e.c.passes.Add(1)
 	if err := e.be.Decode(); err != nil {
 		if errors.Is(err, ErrNoKVSlot) {
 			// The cache is full, not broken. Evict the longest-running stream so the

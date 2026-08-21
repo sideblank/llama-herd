@@ -128,6 +128,38 @@ func (r *Report) WriteMarkdown(w io.Writer) error {
 			ms(res.TTFTp50), ms(res.TTFTp95))
 	}
 
+	// Speculation is reported separately because it is the lever the whole project turns
+	// on, and because "loaded but contributing nothing" is a distinct, silent failure.
+	anyLib := false
+	for _, res := range r.Results {
+		if res.Library != nil {
+			anyLib = true
+			break
+		}
+	}
+	if anyLib {
+		b.WriteString("\n### Speculation and prefill\n\n")
+		b.WriteString("| Streams | Prefill tok/s | Decode passes | Tokens per pass | Speculation |\n")
+		b.WriteString("|--------:|--------------:|--------------:|----------------:|:------------|\n")
+		for _, res := range r.Results {
+			if res.Library == nil {
+				continue
+			}
+			fmt.Fprintf(&b, "| %d | %.1f | %d | %.2f | %s |\n",
+				res.Streams, res.Library.PromptTokPerSec, res.DecodePasses,
+				res.TokensPerPass, speculationVerdict(res))
+		}
+		b.WriteString("\nOne decode pass serves every active stream at once, so **tokens per pass** is\n")
+		b.WriteString("normally about the number of streams running. A speculative head that lands drafts\n")
+		b.WriteString("pushes it higher, so the ratio above the stream count is the acceptance rate.\n\n")
+		b.WriteString("At one stream the reading is direct: 1.00 means no speculation, and anything above\n")
+		b.WriteString("means drafts are being accepted. **A model whose weights carry MTP layers and still\n")
+		b.WriteString("reads 1.00 is the failure worth catching** — the head is loaded, occupying VRAM, and\n")
+		b.WriteString("contributing nothing.\n\n")
+		b.WriteString("Passes are counted by the engine, not by the inference library, whose own counter\n")
+		b.WriteString("only increments for single-token batches and so reads near zero here.\n")
+	}
+
 	b.WriteString("\n## What these numbers mean\n\n")
 	b.WriteString("- **Decode tok/s** — aggregate across all streams, measured from the first token any\n")
 	b.WriteString("  stream produced to the last. Prefill is excluded. This reflects the decode loop.\n")
@@ -147,6 +179,19 @@ func (r *Report) WriteMarkdown(w io.Writer) error {
 
 // ms formats a duration for the report, keeping sub-millisecond values legible rather than
 // rounding them to a misleading "0 ms".
+// speculationVerdict reads tokens-per-pass against the stream count.
+func speculationVerdict(r *Result) string {
+	if r.DecodePasses == 0 {
+		return "not measured"
+	}
+	// Without speculation each pass yields at most one token per active stream. A margin
+	// allows for passes taken while streams were finishing.
+	if r.TokensPerPass > float64(r.Streams)*1.05 {
+		return "**active**"
+	}
+	return "not active"
+}
+
 func ms(d time.Duration) string {
 	switch {
 	case d == 0:

@@ -69,6 +69,20 @@ retry; conflating it with a real error kills a healthy engine.
 **A dead decode loop must be refused, not queued against.** Otherwise one engine failure
 becomes a pile of requests waiting on a loop that will never tick again.
 
+## Measurement
+
+**The inference library's decode counter is wrong for a batching engine.** It increments only
+when a batch holds exactly one token; a continuous-batching engine submits one token per
+active stream, so decode work is attributed to prefill and the decode counter reads near
+zero. Upstream carries a FIXME acknowledging it. Count passes in the engine instead.
+
+**Tokens per pass has the stream count as its baseline, not one.** One forward pass serves
+every active stream, so four streams yielding 3.9 tokens per pass is ordinary batching, not
+speculation. Reading 1.0 as the baseline reports speculation on every multi-stream run.
+
+**A model carrying MTP layers that reads at the baseline is the failure worth catching.** The
+head is loaded, occupying VRAM, and contributing nothing.
+
 ## Vision
 
 **The prompt must contain the media marker.** Without it the tokenizer produces chunks with no

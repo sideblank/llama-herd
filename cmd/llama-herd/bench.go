@@ -163,7 +163,7 @@ func benchCmd(args []string) int {
 		fmt.Fprintf(os.Stderr, "measuring %d stream(s)...\n", n)
 		res, err := bench.Run(ctx, eng, bench.Config{
 			Model: target.Name, Prompt: text, Streams: n,
-			Tokens: *tokens, Warmup: *warmup,
+			Tokens: *tokens, Warmup: *warmup, Perf: runner,
 		})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "bench:", err)
@@ -173,6 +173,14 @@ func benchCmd(args []string) int {
 		report.Results = append(report.Results, res)
 		fmt.Fprintf(os.Stderr, "  decode %.1f tok/s, end-to-end %.1f tok/s, TTFT p50 %v\n",
 			res.DecodeTokPerSec, res.EndToEndTokPerSec, res.TTFTp50.Round(time.Millisecond))
+		if res.DecodePasses > 0 {
+			spec := ""
+			if res.TokensPerPass > float64(n)*1.05 {
+				spec = "  speculation ACTIVE"
+			}
+			fmt.Fprintf(os.Stderr, "  %.2f tokens/pass over %d passes (%d streams)%s\n",
+				res.TokensPerPass, res.DecodePasses, n, spec)
+		}
 	}
 
 	if err := writeReport(report, *jsonOut, *mdOut); err != nil {

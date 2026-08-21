@@ -44,6 +44,32 @@ func LoadAverage() (float64, int) {
 	return v, cpus
 }
 
+// LibraryPerf is the inference library's own accounting, reported alongside wall-clock
+// measurement.
+//
+// Only the prefill figures are reported. The library's decode counter increments solely for
+// single-token batches, and a batching engine submits one token per active stream, so decode
+// work is attributed to prefill and the decode counter reads near zero. Upstream carries a
+// FIXME acknowledging this. Decode throughput therefore comes from this package's own
+// measurement, and speculation is measured from the engine's own pass counter.
+type LibraryPerf struct {
+	PromptTokens    int32   `json:"prompt_tokens"`
+	PromptTokPerSec float64 `json:"prompt_tok_per_sec"`
+	EvalCount       int32   `json:"eval_count"`
+	EvalTokPerSec   float64 `json:"eval_tok_per_sec"`
+	GraphReuse      int32   `json:"graph_reuse"`
+	// TokensPerEval above 1.0 means a speculative head is landing drafts. Exactly 1.0 on
+	// a model carrying MTP layers means the head is loaded and contributing nothing.
+	TokensPerEval     float64 `json:"tokens_per_eval"`
+	SpeculationActive bool    `json:"speculation_active"`
+}
+
+// PerfSource is implemented by backends that can report the library's accounting.
+type PerfSource interface {
+	LibraryPerf(produced uint64) LibraryPerf
+	ResetLibraryPerf()
+}
+
 // Config describes one measurement.
 type Config struct {
 	// Model is the registered name to exercise.
@@ -58,6 +84,8 @@ type Config struct {
 	// Warmup runs first and is discarded, so one-off costs — allocation, cache
 	// population, clocks ramping — do not land in the reported figure.
 	Warmup int
+	// Perf optionally supplies the inference library's own accounting.
+	Perf any
 }
 
 // StreamResult is one generation's timings.
@@ -111,6 +139,16 @@ type Result struct {
 
 	Streams_ []StreamResult `json:"streams_detail,omitempty"`
 	Failures int            `json:"failures"`
+
+	// Library is the inference library's own accounting, when the backend can report it.
+	Library *LibraryPerf `json:"library,omitempty"`
+
+	// DecodePasses is forward passes taken during the measurement, counted by the engine.
+	DecodePasses uint64 `json:"decode_passes"`
+	// TokensPerPass is tokens produced per forward pass. One pass serves every active
+	// stream, so this is normally about the stream count; above it means a speculative
+	// head is landing drafts.
+	TokensPerPass float64 `json:"tokens_per_pass"`
 }
 
 // Run measures one configuration against a live engine.
@@ -128,6 +166,14 @@ func Run(ctx context.Context, eng *engine.Engine, cfg Config) (*Result, error) {
 			return nil, fmt.Errorf("bench: warmup: %w", err)
 		}
 	}
+	// Clear the library's counters after warmup so its figures cover the same window as
+	// the wall-clock measurement.
+	if ps, ok := cfg.Perf.(PerfSource); ok && ps != nil {
+		ps.ResetLibraryPerf()
+	}
+
+	// Sample the pass counter before measuring so warmup passes are excluded.
+	passesBefore := eng.Stats().DecodePasses
 
 	var (
 		mu        sync.Mutex
@@ -190,6 +236,17 @@ func Run(ctx context.Context, eng *engine.Engine, cfg Config) (*Result, error) {
 	if n := cfg.Streams - res.Failures; n > 0 {
 		res.PerStreamMeasured = perStream / float64(n)
 		res.PerStreamTokPerSec = res.DecodeTokPerSec / float64(n)
+	}
+
+	if ps, ok := cfg.Perf.(PerfSource); ok && ps != nil {
+		lp := ps.LibraryPerf(uint64(totalToks))
+		res.Library = &lp
+	}
+	if st := eng.Stats(); st.DecodePasses > passesBefore {
+		res.DecodePasses = st.DecodePasses - passesBefore
+		if res.DecodePasses > 0 {
+			res.TokensPerPass = float64(totalToks) / float64(res.DecodePasses)
+		}
 	}
 
 	res.TTFTp50 = percentile(ttfts, 0.50)

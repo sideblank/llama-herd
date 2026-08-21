@@ -215,3 +215,29 @@ func TestLoadAverageIsReadable(t *testing.T) {
 		t.Fatalf("load = %v", load)
 	}
 }
+
+// Tokens per pass is how speculation becomes visible, and it is easy to misread. One pass
+// serves every active stream, so the baseline is the stream count — not 1.
+func TestSpeculationVerdictUsesStreamCountAsBaseline(t *testing.T) {
+	cases := []struct {
+		name string
+		r    Result
+		want string
+	}{
+		{"single stream, no speculation",
+			Result{Streams: 1, DecodePasses: 100, TokensPerPass: 1.0}, "not active"},
+		{"four streams batching normally is NOT speculation",
+			Result{Streams: 4, DecodePasses: 100, TokensPerPass: 3.9}, "not active"},
+		{"single stream with drafts landing",
+			Result{Streams: 1, DecodePasses: 100, TokensPerPass: 1.8}, "**active**"},
+		{"four streams with drafts landing",
+			Result{Streams: 4, DecodePasses: 100, TokensPerPass: 6.2}, "**active**"},
+		{"no passes recorded",
+			Result{Streams: 2, DecodePasses: 0}, "not measured"},
+	}
+	for _, c := range cases {
+		if got := speculationVerdict(&c.r); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}

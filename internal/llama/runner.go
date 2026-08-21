@@ -6,6 +6,7 @@ package llama
 import (
 	"fmt"
 
+	"github.com/sideblank/llama-herd/internal/bench"
 	"github.com/sideblank/llama-herd/internal/engine"
 )
 
@@ -48,8 +49,9 @@ type Runner struct {
 // Compile-time proof that Runner satisfies the scheduler's interface. Without this the
 // mismatch would only surface where the two are first wired together.
 var (
-	_ engine.Backend  = (*Runner)(nil)
-	_ engine.Renderer = (*Runner)(nil)
+	_ engine.Backend   = (*Runner)(nil)
+	_ engine.Renderer  = (*Runner)(nil)
+	_ bench.PerfSource = (*Runner)(nil)
 )
 
 // RunnerConfig describes a model to load and how to serve it.
@@ -177,6 +179,26 @@ func (r *Runner) PrefillMedia(seq engine.SeqID, nPast engine.Pos, prompt string,
 
 // MediaMarker is the placeholder a prompt must contain where media belongs.
 func (r *Runner) MediaMarker() string { return Marker() }
+
+// Perf returns libllama's accounting for this runner's context.
+func (r *Runner) Perf() Perf { return r.ctx.Perf() }
+
+// PerfReset clears it, so warmup can be excluded from a measurement.
+func (r *Runner) PerfReset() { r.ctx.PerfReset() }
+
+// LibraryPerf reports the library's prefill accounting. Its decode counter is not reported:
+// it increments only for single-token batches, so it reads near zero for a batching engine.
+func (r *Runner) LibraryPerf(_ uint64) bench.LibraryPerf {
+	p := r.ctx.Perf()
+	return bench.LibraryPerf{
+		PromptTokens:    p.PromptTokens,
+		PromptTokPerSec: p.PromptTokensPerSec(),
+		GraphReuse:      p.GraphReuse,
+	}
+}
+
+// ResetLibraryPerf clears the library counters.
+func (r *Runner) ResetLibraryPerf() { r.ctx.PerfReset() }
 
 // Summary describes the loaded model, including what it declares about MTP.
 func (r *Runner) Summary() string { return r.model.Summary() }
