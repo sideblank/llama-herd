@@ -17,10 +17,13 @@ cheap now and expensive once history accumulates.
 - [ ] **Sign and date PROVENANCE.md** when the first code commit lands. Do not backdate.
 - [ ] **If the drafted IP assignment is later executed**, carve this project out or record the
       Apache-2.0 licence as an existing encumbrance in its schedule, or the schedule will be wrong.
-- [ ] **Configure `.internal-patterns`** locally (gitignored) and set the `INTERNAL_PATTERNS`
-      repository secret in GitHub, listing internal service names, hostnames, and infrastructure
-      identifiers. Without it `scripts/check-leaks.sh` runs structural checks only. The list must
-      never be committed — this repo becomes public.
+- [ ] **Set the `INTERNAL_PATTERNS` repository secret in GitHub.** `.internal-patterns` is
+      configured locally, but CI has no equivalent yet, so the name-based half of the leak scan
+      does not run there — only the structural checks do. This is the one guard that is live
+      locally and absent in CI.
+- [ ] Keep provider-specific test objects in the gitignored `testing/` directory. Two layers back
+      this up: `.gitignore` keeps them out of the tree, and `check-leaks.sh` scans tracked files
+      for infrastructure names.
 - [ ] **Keep platform coupling out by construction.** Job-queue pull workers, storage and dispatch
       integration, and anything else specific to the private platform must never be written here —
       not in code and not in history. This is the reason for the rewrite.

@@ -13,8 +13,18 @@ once per clone. Without it the local hooks do not run.
 
 ## Local scratch
 
-`scripts/local/` is gitignored. Put one-off drivers, deploy helpers and experiments there.
-The rest of `scripts/` is tracked and runs in CI.
+Three directories are gitignored and never committed:
+
+| Directory | For |
+|---|---|
+| `testing/` | provider-specific deployment and test objects — container group definitions, GPU provider configs, node bootstrap, deploy manifests |
+| `scripts/local/` | one-off drivers and helpers. The rest of `scripts/` is tracked and runs in CI |
+| `dev/` | anything else local |
+
+`testing/` matters most: this repository is going public and its history is permanent, so
+objects naming infrastructure must never enter the tree. Benchmark *methodology* and
+*results* are provider-neutral and belong in `docs/`; the machinery that produced them does
+not.
 
 ## Commit rules
 

@@ -50,7 +50,11 @@ AGENTS.md
 .vscode/
 .internal-patterns
 
-# Local scratch scripts. scripts/ itself is tracked — CI runs check-commits.sh and
-# check-leaks.sh from there — so only this subdirectory is ignored.
+# Local scratch. Never committed.
+#
+# testing/ in particular holds provider-specific deployment and test objects — container
+# group definitions, provider configs, node setup — which name infrastructure that must not
+# appear in a repo intended to go public.
+testing/
 scripts/local/
 dev/
