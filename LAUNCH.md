@@ -66,8 +66,8 @@ cheap now and expensive once history accumulates.
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for the reasoning behind each.
 
-- [ ] Engine core: decode loop, slot table, continuous batching, admission control
-- [ ] Chat-completions API with streaming — the integration surface every agent uses
+- [x] Engine core: decode loop, slot table, continuous batching, admission control
+- [x] Chat-completions API with streaming — the integration surface every agent uses
 - [ ] Benchmark harness — reproducing the recorded throughput on real cards gates everything after
 - [ ] KV quantization and a real KV budget, not a fixed slot count
 - [ ] Verify llama.cpp MTP/speculative support against a quant that retains `nextn` tensors
@@ -87,7 +87,9 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for the reasoning behind each.
 ## Ongoing
 
 - [x] Go CI — `build.yml` builds and vets on Linux, macOS and Windows.
-- [ ] Add `-race` unit tests to CI once the engine core exists.
+- [x] `-race` unit tests run in CI on all three platforms.
+- [ ] Per-request sampling: temperature and friends are accepted and ignored today, since
+      sampler chains are built per model at load rather than per request.
 - [x] **`LLAMA_CPP_REF` pinned** to a llama.cpp release tag in both workflows. Bump deliberately
       and note the new ref in the release notes.
 - [ ] **Confirm build provenance attestation works on this repo.** `release.yml` attests the

@@ -31,10 +31,19 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `llama-herd %s
 
 usage:
+  llama-herd serve --manifest <file> [--addr <addr>]
+                         host the manifest's models over an OpenAI-compatible API
   llama-herd version     print version and build information
   llama-herd doctor      verify linkage and list the devices it can see
 
 `, version)
+}
+
+// newFlagSet builds a subcommand flag set that prints usage to stderr on error.
+func newFlagSet(name string) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	return fs
 }
 
 func main() {
@@ -42,6 +51,9 @@ func main() {
 	flag.Parse()
 
 	switch flag.Arg(0) {
+	case "serve":
+		os.Exit(serve(flag.Args()[1:]))
+
 	case "version":
 		fmt.Printf("llama-herd %s\n", version)
 		fmt.Printf("  commit:   %s\n", commit)

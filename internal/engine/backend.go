@@ -17,6 +17,21 @@ type (
 	SeqID int32
 )
 
+// ChatMessage is one turn of a conversation.
+type ChatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// Renderer turns messages into the prompt string a specific model expects.
+//
+// Unlike Backend, this is called from request goroutines and must be safe for concurrent
+// use. Implementations should capture whatever they need at load time rather than reaching
+// into live context state.
+type Renderer interface {
+	RenderChat(msgs []ChatMessage) (string, error)
+}
+
 var (
 	// ErrNoKVSlot means the KV cache could not fit the batch. Recoverable: free a
 	// sequence and resubmit.

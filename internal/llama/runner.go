@@ -27,11 +27,19 @@ type Runner struct {
 
 	nVocab int32
 	eos    Token
+
+	// chatTmpl is captured at load. Rendering then touches no live context state, which
+	// is what makes RenderChat safe to call from request goroutines while the decode
+	// loop is running.
+	chatTmpl string
 }
 
 // Compile-time proof that Runner satisfies the scheduler's interface. Without this the
 // mismatch would only surface where the two are first wired together.
-var _ engine.Backend = (*Runner)(nil)
+var (
+	_ engine.Backend  = (*Runner)(nil)
+	_ engine.Renderer = (*Runner)(nil)
+)
 
 // RunnerConfig describes a model to load and how to serve it.
 type RunnerConfig struct {
@@ -78,6 +86,12 @@ func OpenRunner(cfg RunnerConfig) (*Runner, error) {
 			return nil, fmt.Errorf("sampler %d: %w", i, err)
 		}
 		r.samplers[i] = s
+	}
+
+	// A missing chat template is not fatal: the model can still serve raw completions.
+	// It only means chat requests for it must be refused rather than rendered wrongly.
+	if tmpl, err := m.ChatTemplate(); err == nil {
+		r.chatTmpl = tmpl
 	}
 
 	// The batch is sized to the logical batch, which is the ceiling llama_decode accepts

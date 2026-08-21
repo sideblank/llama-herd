@@ -97,6 +97,43 @@ Those came from a **different implementation** of this architecture and are reco
 this rewrite aims to clear — a design target, not a benchmark of this code, which does not yet
 exist. See [PROVENANCE.md](PROVENANCE.md).
 
+## Running
+
+Describe the herd in a manifest — one entry per model, sized to the card it will sit on:
+
+```json
+{
+  "listen": ":8080",
+  "models": [
+    { "name": "chat", "path": "/models/model.gguf",
+      "gpu_layers": -1, "context": 32768, "streams": 6, "load_mtp": true }
+  ]
+}
+```
+
+```bash
+llama-herd serve --manifest manifest.json
+```
+
+That exposes an OpenAI-compatible API, so any agent with a configurable base URL works
+against it unmodified:
+
+```bash
+curl localhost:8080/v1/chat/completions -H 'Content-Type: application/json' -d '{
+  "model": "chat",
+  "messages": [{"role":"user","content":"hello"}],
+  "stream": true
+}'
+```
+
+`GET /v1/models` lists what is loaded. `GET /health` reports per-model liveness and returns
+503 if a model's decode loop has died — so a load balancer stops sending traffic to a server
+that is still listening but can no longer answer.
+
+Sizing is per model rather than global on purpose: a herd may span cards of different
+capacities, and one stream count applied to all of them either wastes the large card or
+fails on the small one. See [examples/manifest.json](examples/manifest.json).
+
 ## Install
 
 Pre-built archives for Linux, macOS and Windows are attached to each

@@ -1,0 +1,31 @@
+{
+  "listen": ":8080",
+  "models": [
+    {
+      "name": "chat",
+      "path": "/models/your-model.gguf",
+      "gpu_layers": -1,
+      "context": 32768,
+      "batch": 2048,
+      "streams": 6,
+      "load_mtp": true,
+      "max_queue": 64,
+      "sampling": {
+        "temperature": 0.8,
+        "top_k": 40,
+        "top_p": 0.95,
+        "min_p": 0.05
+      }
+    },
+    {
+      "name": "big",
+      "path": "/models/large-model.gguf",
+      "gpu_layers": -1,
+      "split_mode": "layer",
+      "tensor_split": [0.66, 0.34],
+      "context": 16384,
+      "batch": 2048,
+      "streams": 2
+    }
+  ]
+}
