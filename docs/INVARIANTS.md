@@ -50,6 +50,11 @@ produce exactly one token per forward pass. Driving the head requires a second c
 MTP type, linked to the target, and a draft-then-verify loop; the model flag alone only makes
 the weights resident. Measured on a real model: tensors loaded, 1.00 tokens per pass.
 
+**The API for driving an MTP head is not public.** The public header exposes the layer count
+and nothing else; feeding a draft context needs the target's hidden states, which live in a
+staging header that is not installed, permits breaking changes, and asks not to be included.
+Any MTP implementation either wraps upstream's common library or vendors an unstable header.
+
 **Presence is not benefit.** The accept rate is the number that decides whether MTP earned its
 space, and it varies by model and by workload.
 

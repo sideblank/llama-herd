@@ -79,11 +79,35 @@ draft-then-verify loop: the draft proposes several tokens, the target verifies t
 pass, and the longest matching prefix is accepted. Setting the model flag alone loads the
 weights and nothing drives them.
 
+**The API needed to drive an MTP head is not public.** Feeding a draft context requires the
+target's hidden states, and the function that returns them lives in a staging header that
+upstream describes as work in progress, permits breaking changes and C++ in, is not installed
+by the build, and asks callers not to include it. The public header exposes only the layer
+count.
+
+That leaves three routes, and the choice matters more than the code:
+
+1. **Link llama.cpp's common library and wrap its speculative implementation.** This is what
+   upstream's own server does, and it covers all three MTP architectures rather than one. It
+   is C++ with C++ types in its interface, so it needs a small C shim to be callable — the
+   same shape of seam a previous implementation used for the same reason. Cost: a C++
+   dependency and a shim to maintain.
+2. **Vendor the staging header and bind it directly.** Least code today, and it breaks on any
+   upstream change, silently, in a feature whose failure mode is already "loaded and doing
+   nothing".
+3. **Implement classic draft-model speculation instead**, which needs only public API: a small
+   model drafts, the target verifies, the longest matching prefix is accepted. It works today
+   and on any model, but the draft weights cost VRAM that an MTP head does not, which is
+   exactly the advantage MTP was chosen for.
+
+Route 3 is implementable now and is the sane first step: it makes the draft-verify loop real
+and measurable against any model, and the loop is the same regardless of where drafts come
+from. Route 1 then swaps the draft source once the loop exists.
+
 Work items:
 
-- **Implement speculative decoding**: a second context linked to the target, a draft step, a
-  verify step, and prefix acceptance. This is the actual work; everything else about MTP is
-  ready.
+- **Implement the draft-verify loop** with a draft model, using public API only. The loop is
+  the reusable part; the draft source is swappable.
 - Decide how a draft context shares the KV budget. It is a second context over the same
   weights, so its cache competes with the target's for the same VRAM.
 - Confirm `load_mtp` finds the tensors in each candidate quant, which is already measurable.
