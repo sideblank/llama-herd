@@ -132,6 +132,18 @@ round trip hides a lot at small model sizes.
 and ignored on update; image caching likewise. Getting them wrong means recreating, not
 patching.
 
+**An image change is queued, not applied.** Reading the image back straight after a patch
+returns the old value, which is indistinguishable from a silently dropped patch. Wait for the
+provider's pending-change flag to clear before judging, then read back — both steps, because
+either alone gives a wrong answer.
+
+**An image patch on a running group is silently dropped.** The call returns success and the
+live image is unchanged. Stop first, and wait until the group has actually reached stopped
+rather than trusting that the stop call returned.
+
+**Registry credentials travel with the image.** Patching the image alone is accepted and then
+cannot pull.
+
 **Deploy immutable tags, never floating ones.** A provider that caches images at the edge can
 serve a stale copy of a mutable tag: pushing a new `:dev` and restarting brought up the
 *previous* build, with its endpoints still missing and nothing reporting a mismatch. The
