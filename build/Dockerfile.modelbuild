@@ -1,0 +1,44 @@
+# syntax=docker/dockerfile:1
+#
+# The model build environment.
+#
+# Separate from the serving image on purpose. Serving needs the library and nothing else;
+# building needs Python, torch, the conversion scripts and the quantization tools — several
+# gigabytes that have no business on a node that only answers requests.
+
+ARG CUDA_VERSION=12.8.1
+ARG UBUNTU_VERSION=22.04
+ARG LLAMA_CPP_REF=b10545
+
+FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION}
+ARG LLAMA_CPP_REF
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git cmake build-essential ca-certificates curl \
+      python3 python3-pip python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 --branch ${LLAMA_CPP_REF} \
+      https://github.com/ggml-org/llama.cpp.git /src/llama.cpp
+
+# The tools are the point here, unlike the serving image where they are excluded. quantize and
+# imatrix both live under tools/, and imatrix needs CUDA to run in reasonable time.
+RUN cmake -S /src/llama.cpp -B /src/build \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DGGML_CUDA=ON \
+      -DCMAKE_CUDA_ARCHITECTURES="86;89;120" \
+      -DLLAMA_BUILD_TESTS=OFF \
+      -DLLAMA_BUILD_EXAMPLES=OFF \
+      -DLLAMA_BUILD_SERVER=OFF \
+      -DLLAMA_BUILD_UI=OFF \
+      -DLLAMA_BUILD_APP=OFF \
+      -DLLAMA_BUILD_TOOLS=ON \
+ && cmake --build /src/build --config Release -j "$(nproc)" --target llama-quantize llama-imatrix
+
+RUN python3 -m pip install --no-cache-dir --break-system-packages \
+      -r /src/llama.cpp/requirements/requirements-convert_hf_to_gguf.txt \
+      huggingface_hub
+
+ENV PATH=/src/build/bin:$PATH
+ENV LLAMA_CPP_SRC=/src/llama.cpp
+WORKDIR /work

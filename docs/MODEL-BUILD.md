@@ -169,6 +169,38 @@ Resolve the licence per model **before** conversion, not before publication. Con
 cheap; discovering after a GPU-week of imatrix and quantization work that a model cannot be
 redistributed is not.
 
+## One pipeline, many models
+
+The build is driven by a spec file per model and a single script. Bringing up a new model is a
+spec plus whatever localised tweaks that architecture genuinely needs — a projector, a
+different quant per card — not a new pipeline.
+
+```bash
+scripts/build-model.sh models/<name>.json              # everything
+scripts/build-model.sh models/<name>.json --stage convert
+```
+
+The spec format is in [../models/SPEC.md](../models/SPEC.md). The build environment is a
+separate image ([../build/Dockerfile.modelbuild](../build/Dockerfile.modelbuild)) because
+building needs Python, torch and the quantization tools, none of which belong on a node whose
+only job is answering requests.
+
+### The gates, and why each one exists
+
+Every gate catches a failure that is otherwise silent:
+
+- **Licence recorded** before anything runs. Converting is cheap; discovering after a GPU-week
+  that a model cannot be redistributed is not.
+- **Revision pinned** to a commit. Repositories are updated in place, so a branch name does
+  not identify a build, and two builds with the same name could differ.
+- **MTP present after conversion**, checked against the file rather than the model card.
+- **MTP present after quantization**, checked separately at every level. It fails here for
+  different reasons than it fails at conversion, which is why one check is not enough.
+- **Corpus recorded** before the importance matrix runs. A matrix is only as good as what it
+  saw, and a reader needs to know whether that matched their workload.
+- **Capacity reported per target card** from the finished file, so the serve settings in the
+  spec are checked against reality rather than assumed.
+
 ## Where builds run
 
 Conversion is CPU and disk bound. Imatrix computation and all measurement need a GPU, and
