@@ -106,3 +106,22 @@ quantized as hard as the model proposes badly, the accept rate collapses, and th
 path gives back nothing while still occupying VRAM — the cost is paid twice. Per-tensor
 overrides make this nearly free in space terms, and no third-party quantization does it,
 because nobody else is building an engine around the head.
+
+## Checking a configuration before deploying it
+
+`llama-herd fit` answers whether a streams-by-context target fits a card, from the model's own
+declared geometry, before any GPU time is spent finding out:
+
+```bash
+llama-herd fit --card 3090 --streams 4 --context 128k model.gguf
+```
+
+It reports total context by KV precision, whether the requested target fits, and — when it does
+not — the shortfall in bytes and the required bits per weight. A shortfall is more useful than a
+refusal, because it says whether a second card closes the gap or whether the target is
+unreachable at any quantization.
+
+Two things it reads that are easy to get wrong by hand: hybrid architectures cache on only
+every Nth layer, so their KV cost is a fraction of a dense model of the same depth; and the
+weight budget is whatever the KV requirement leaves, so the quantization follows from the
+target rather than the other way round.
