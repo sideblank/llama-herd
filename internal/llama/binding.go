@@ -52,6 +52,10 @@ func Backend() { C.llama_backend_init() }
 // BackendFree releases libllama's global state.
 func BackendFree() { C.llama_backend_free() }
 
+// SystemInfo reports the CPU features and backends the linked libllama was built with.
+// Worth recording in a bug report: a throughput number means little without it.
+func SystemInfo() string { return C.GoString(C.llama_print_system_info()) }
+
 // ---------------------------------------------------------------- model
 
 // ModelParams is the subset of llama_model_params this project sets. Anything not named

@@ -51,6 +51,17 @@ cheap now and expensive once history accumulates.
 - [ ] Restrict merges to **squash only**, so the commit policy applies to a single tidy commit.
 - [ ] Confirm `SECURITY.md`'s advisory link resolves once the repo is public.
 
+## Releases
+
+- [ ] Stay on `v0.x` until the engine API settles — SemVer allows breaking changes pre-1.0, and
+      `1.0` is a stability promise.
+- [ ] Do not cut a first release until the runtime can actually serve a token. The binary today
+      does `version` and `doctor` only.
+- [ ] Use prereleases (`v0.2.0-rc.1`) for anything touching the decode path — people run this on
+      expensive hardware.
+- [ ] Add a `CHANGELOG.md`. Conventional commit prefixes would let it be generated; `perf:` earns
+      its place here, since throughput regressions are the bug class that hurts most.
+
 ## Before publishing models
 
 - [ ] **Check every base model's licence.** Quantized builds inherit the upstream terms, which are
@@ -63,8 +74,10 @@ cheap now and expensive once history accumulates.
 
 - [x] Go CI — `build.yml` builds and vets on Linux, macOS and Windows.
 - [ ] Add `-race` unit tests to CI once the engine core exists.
-- [ ] **Pin `LLAMA_CPP_REF`** in both workflows to a llama.cpp release tag. It currently floats on
-      `master`, so an upstream change can break a build with no commit here.
+- [x] **`LLAMA_CPP_REF` pinned** to a llama.cpp release tag in both workflows. Bump deliberately
+      and note the new ref in the release notes.
+- [ ] **Confirm build provenance attestation works on this repo.** `release.yml` attests the
+      artifacts; attestations are free for public repos but may need a paid plan while private.
 - [ ] Confirm ARM runners are available for the release matrix. `ubuntu-24.04-arm` is free for
       public repos; on a private repo it may need a paid plan.
 - [ ] Decide GPU backend coverage for releases. The matrix ships **CPU-only** builds today; CUDA

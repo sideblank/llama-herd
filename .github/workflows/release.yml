@@ -11,10 +11,12 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 env:
-  # Pin this to a llama.cpp release tag before the first real release.
-  LLAMA_CPP_REF: master
+  # Pinned — see build.yml for why. Bump deliberately.
+  LLAMA_CPP_REF: b10545
 
 jobs:
   build:
@@ -73,7 +75,7 @@ jobs:
 
           mkdir -p dist/llama-herd
           go build -trimpath \
-            -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${GITHUB_SHA} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${GITHUB_SHA} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ) -X main.llamaCppRef=${LLAMA_CPP_REF}" \
             -o "dist/llama-herd/llama-herd$([ "${{ runner.os }}" = Windows ] && echo .exe)" \
             ./cmd/llama-herd
 
@@ -139,6 +141,14 @@ jobs:
           cd artifacts
           sha256sum llama-herd_* > SHA256SUMS
           cat SHA256SUMS
+
+      # Signed provenance that these artifacts came from this workflow at this commit.
+      # Checksums prove a file did not corrupt in transit; this proves where it came from,
+      # which matters more for a binary people run on their own machine.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'artifacts/llama-herd_*.*'
 
       - name: Publish
         env:

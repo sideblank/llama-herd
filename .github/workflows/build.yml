@@ -9,9 +9,10 @@ permissions:
   contents: read
 
 env:
-  # Pin this to a llama.cpp release tag before the first real release. Leaving it
-  # floating means a build can break from an upstream change with no commit here.
-  LLAMA_CPP_REF: master
+  # Pinned. A floating ref means an upstream commit can break the build with no change
+  # here, and two builds of the same tag can differ. Bump deliberately, and note the new
+  # ref in the release notes: users match a GGUF to the upstream a binary was built on.
+  LLAMA_CPP_REF: b10545
 
 jobs:
   build:

@@ -20,6 +20,11 @@ var (
 	version = "dev"
 	commit  = "none"
 	date    = "unknown"
+	// llamaCppRef is the upstream llama.cpp tag this binary was built against. A
+	// llama-herd build is really a pair — this code plus that upstream — because the
+	// library API and the GGUF formats it reads both move. Reporting it turns "the
+	// model will not load" into an answerable question.
+	llamaCppRef = "unknown"
 )
 
 func usage() {
@@ -43,6 +48,7 @@ func main() {
 		fmt.Printf("  built:    %s\n", date)
 		fmt.Printf("  go:       %s\n", runtime.Version())
 		fmt.Printf("  platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+		fmt.Printf("  llama.cpp: %s\n", llamaCppRef)
 
 	case "doctor":
 		// Proves the binary actually links and initialises libllama, which is the
@@ -51,6 +57,8 @@ func main() {
 		llama.Backend()
 		defer llama.BackendFree()
 		fmt.Printf("llama.cpp backend initialised — linkage OK (%s/%s)\n", runtime.GOOS, runtime.GOARCH)
+		fmt.Printf("built against: %s\n", llamaCppRef)
+		fmt.Printf("system: %s\n", llama.SystemInfo())
 
 	default:
 		usage()
