@@ -62,13 +62,27 @@ cheap now and expensive once history accumulates.
 - [ ] Add a `CHANGELOG.md`. Conventional commit prefixes would let it be generated; `perf:` earns
       its place here, since throughput regressions are the bug class that hurts most.
 
+## Engine milestones
+
+See [docs/ROADMAP.md](docs/ROADMAP.md) for the reasoning behind each.
+
+- [ ] Engine core: decode loop, slot table, continuous batching, admission control
+- [ ] HTTP endpoint with streaming
+- [ ] Benchmark harness — reproducing the recorded throughput on real cards gates everything after
+- [ ] KV quantization and a real KV budget, not a fixed slot count
+- [ ] Verify llama.cpp MTP/speculative support against a quant that retains `nextn` tensors
+- [ ] Multi-GPU placement and capacity-aware routing
+
 ## Before publishing models
 
 - [ ] **Check every base model's licence.** Quantized builds inherit the upstream terms, which are
       not Apache-2.0 and may restrict redistribution or commercial use. Some permit both freely;
       others do not. Resolve per model before the Hugging Face org exists.
-- [ ] Write a model card per build recording base model, licence, quantization, and the manifest
-      settings (stream count, context, KV budget) for its target card.
+- [ ] Write a model card per build recording base model, licence, quantization, KV precision,
+      **whether MTP tensors are retained**, and the manifest settings (stream count, context, KV
+      budget) for its target card.
+- [ ] Resolve licences per line — Qwen, GLM, Nemotron each carry their own terms.
+- [ ] Decide the Hugging Face org name and the Cloudflare delivery path.
 
 ## Ongoing
 
