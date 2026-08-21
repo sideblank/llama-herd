@@ -210,6 +210,22 @@ The sensible first step is a small in-process store behind a narrow interface, s
 first use case, with persistence added only if it is needed. Choosing a database before choosing
 the access pattern is the failure mode here.
 
+## 6b. The model build process
+
+The weights are half the product, and the reason is narrow: MTP tensors are frequently
+missing from redistributed quantizations, nothing on a model page says so, and the loss
+cannot be recovered afterwards.
+
+Upstream conversion includes them by default — a publisher must opt out — so this is a
+publisher-choice gap rather than a tooling gap, and building our own is tractable with the
+standard tools. Export support covers Qwen, GLM, Nemotron, DeepSeek and others, which is the
+portfolio.
+
+See [MODEL-BUILD.md](MODEL-BUILD.md) for the pipeline and its gates. The two that matter:
+verify MTP tensors after conversion **and** after quantization, since they fail at different
+stages; and measure the accept rate rather than mere presence, since tensors that load but
+propose poorly give back little.
+
 ## 7. Model lines and distribution
 
 Published alongside the engine:
