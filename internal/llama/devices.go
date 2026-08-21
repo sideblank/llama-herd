@@ -12,6 +12,25 @@ import "C"
 
 import "unsafe"
 
+// LoadBackends registers every backend plugin found beside the library.
+//
+// This is mandatory when llama.cpp is built with GGML_BACKEND_DL, which makes each backend
+// a shared object loaded at run time rather than a linked dependency. Skip it and the
+// device list comes back empty, no CUDA device is ever found, and the server quietly runs
+// on CPU while appearing healthy — the worst possible failure for a GPU runtime, because
+// nothing reports an error.
+//
+// Safe to call more than once; backends already registered are not duplicated.
+func LoadBackends() { C.ggml_backend_load_all() }
+
+// LoadBackendsFrom registers backend plugins from a specific directory, for images that
+// place them somewhere other than beside the library.
+func LoadBackendsFrom(dir string) {
+	c := C.CString(dir)
+	defer C.free(unsafe.Pointer(c))
+	C.ggml_backend_load_all_from_path(c)
+}
+
 // DeviceType distinguishes what a backend device actually is. A heterogeneous host can
 // present several at once, and they are not interchangeable: an integrated GPU shares host
 // memory, so its reported capacity says nothing about how much a model can safely take.

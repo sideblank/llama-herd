@@ -73,6 +73,7 @@ COPY internal ./internal
 
 ARG VERSION=dev
 ARG COMMIT=none
+ARG BUILD_DATE=unknown
 
 # The runtime libraries sit beside the binary in the final image, so the loader is told to
 # look there rather than in a system path.
@@ -84,7 +85,7 @@ ENV CGO_CFLAGS="-I/opt/llama/include"
 ENV CGO_LDFLAGS="-L/opt/llama/lib -Wl,-rpath,\$ORIGIN/../lib -Wl,--allow-shlib-undefined"
 
 RUN go build -trimpath \
-      -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.llamaCppRef=${LLAMA_CPP_REF}" \
+      -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${BUILD_DATE} -X main.llamaCppRef=${LLAMA_CPP_REF}" \
       -o /out/bin/llama-herd ./cmd/llama-herd
 
 # --- runtime ---------------------------------------------------------------------------
@@ -99,6 +100,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=llama /opt/llama/lib /opt/llama-herd/lib
+# With GGML_BACKEND_DL the backends install to bin/, not lib/, and they are loaded by
+# path at run time rather than linked. ggml_backend_load_all searches the directory of
+# the running executable, so they go beside the binary. Copying only lib/ silently drops
+# them, and the result looks healthy while finding no devices at all.
+COPY --from=llama /opt/llama/bin /opt/llama-herd/bin
 COPY --from=build /out/bin/llama-herd /opt/llama-herd/bin/llama-herd
 COPY docker-entrypoint.sh /opt/llama-herd/bin/docker-entrypoint.sh
 

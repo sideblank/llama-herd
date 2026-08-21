@@ -48,9 +48,15 @@ var (
 	ErrDecode = errors.New("llama: decode failed")
 )
 
-// Backend initialises libllama's global state. Call once per process before loading a
-// model; call BackendFree at shutdown.
-func Backend() { C.llama_backend_init() }
+// Backend initialises libllama's global state and registers the backend plugins. Call once
+// per process before loading a model; call BackendFree at shutdown.
+//
+// The plugin registration is not optional — see LoadBackends. Without it a build with
+// dynamically loaded backends finds no devices at all and falls back to CPU silently.
+func Backend() {
+	LoadBackends()
+	C.llama_backend_init()
+}
 
 // BackendFree releases libllama's global state.
 func BackendFree() { C.llama_backend_free() }
