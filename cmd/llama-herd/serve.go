@@ -74,6 +74,7 @@ func runnerConfig(m manifest.Model) llama.RunnerConfig {
 	cp.NBatch = m.Batch
 	cp.NUBatch = m.Batch
 	cp.NSeqMax = m.Streams
+	cp.KVUnified = m.KVUnified
 	if m.Threads > 0 {
 		cp.NThreads = m.Threads
 	}

@@ -55,6 +55,18 @@ type Model struct {
 	// LoadMTP loads multi-token-prediction layers when the file carries them.
 	LoadMTP bool `json:"load_mtp,omitempty"`
 
+	// KVUnified shares one attention buffer across streams rather than giving each its
+	// own. Worth measuring both ways: streams fanned out from a common prompt share a
+	// large prefix and benefit, while unrelated requests generally do not.
+	KVUnified bool `json:"kv_unified,omitempty"`
+
+	// MMProjPath is the multimodal projector accompanying a vision model. Without it the
+	// model is text-only even if its weights support images.
+	MMProjPath string `json:"mmproj_path,omitempty"`
+	// VisionGPU offloads the vision encoder. Encoding an image on CPU is slow enough to
+	// dominate time-to-first-token.
+	VisionGPU bool `json:"vision_gpu,omitempty"`
+
 	// MaxQueue bounds requests waiting for a stream. 0 is unbounded.
 	MaxQueue int `json:"max_queue,omitempty"`
 

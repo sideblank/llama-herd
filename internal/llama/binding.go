@@ -206,6 +206,16 @@ type ContextParams struct {
 	Embeddings bool
 	// OffloadKQV places the KV cache and attention ops on the GPU.
 	OffloadKQV bool
+	// KVUnified selects one attention buffer shared across sequences instead of a
+	// per-sequence one.
+	//
+	// The right answer depends on the workload, not on preference. Independent requests
+	// that share nothing are better served per-sequence. Requests fanned out from a
+	// common prompt — the same system message and context issued many ways — share a
+	// large prefix, and a unified buffer exploits that. Upstream also warns that
+	// disabling it with several sequences can hurt in some cases, so this is worth
+	// measuring per deployment rather than assuming.
+	KVUnified bool
 	// CtxType selects the context kind. Use CtxTypeMTP for a context that drives the
 	// model's multi-token-prediction head, which requires the weights to have been
 	// loaded with LoadMTP.
@@ -232,6 +242,7 @@ func DefaultContextParams() ContextParams {
 		NThreadsBatch: int32(c.n_threads_batch),
 		Embeddings:    bool(c.embeddings),
 		OffloadKQV:    bool(c.offload_kqv),
+		KVUnified:     bool(c.kv_unified),
 		CtxType:       ContextType(c.ctx_type),
 	}
 }
@@ -246,6 +257,7 @@ func (p ContextParams) c() C.struct_llama_context_params {
 	c.n_threads_batch = C.int32_t(p.NThreadsBatch)
 	c.embeddings = C.bool(p.Embeddings)
 	c.offload_kqv = C.bool(p.OffloadKQV)
+	c.kv_unified = C.bool(p.KVUnified)
 	c.ctx_type = C.enum_llama_context_type(p.CtxType)
 	return c
 }

@@ -172,6 +172,29 @@ response.
 The endpoint should therefore be built to exploit the first three, and should not promise the
 impossible fourth.
 
+## 5b. Vision and KV sharing
+
+**Vision needs no shim.** llama.cpp's multimodal library builds standalone against ggml and
+llama alone, and the flow is narrow: encode the image, prefill the result into the
+sequence's KV at a given position, then continue through the ordinary decode loop from the
+position it returns. There is no separate vision decode path — only a different way of
+filling the prompt, so a vision request occupies a slot exactly like a text one.
+
+The prompt must carry the media marker. Without it the tokenizer produces a chunk list with
+no media, the image is dropped, and the model answers fluently about nothing — a silent
+failure, not an error.
+
+**KV sharing is a real choice, not a default.** A context can give each sequence its own
+attention buffer or share one across them. Independent requests that have nothing in common
+are better served per-sequence. But requests fanned out from one plan — the same system
+message and context issued several ways — share a large prefix, and a unified buffer
+exploits it. Upstream also warns that disabling sharing across several sequences can hurt in
+some cases.
+
+That makes it a per-deployment measurement rather than a setting to pick once, and it is
+exposed in the manifest for exactly that reason. It is also a good first use of the
+benchmark harness: the same model, the same sweep, the flag both ways.
+
 ## 6. Shared state between models
 
 Longer term: give co-resident models a way to consult one another's data — a shared store the

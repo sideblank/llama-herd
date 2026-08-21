@@ -22,6 +22,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN git clone --depth 1 --branch ${LLAMA_CPP_REF} \
       https://github.com/ggml-org/llama.cpp.git /src/llama.cpp
 
+# LLAMA_BUILD_MTMD builds libmtmd, the multimodal library behind vision and audio input.
+# Its standalone hook exists for exactly this case — packaging the library for a language
+# binding — and it fires only when common and tools are off, which is this configuration.
+# It links ggml and llama alone; linking llama-common is a hard error upstream.
+#
 # 86 = Ampere (3090), 89 = Ada (4090), 120 = Blackwell (5090).
 # Only the library is built: the tools, examples, server and unified app are not used
 # here, and the app target in particular pulls in the common library we do not need.
@@ -47,6 +52,7 @@ RUN cmake -S /src/llama.cpp -B /src/build \
       -DLLAMA_BUILD_SERVER=OFF \
       -DLLAMA_BUILD_UI=OFF \
       -DLLAMA_BUILD_APP=OFF \
+      -DLLAMA_BUILD_MTMD=ON \
       -DCMAKE_INSTALL_PREFIX=/opt/llama \
  && cmake --build /src/build --config Release -j "$(nproc)" \
  && cmake --install /src/build
