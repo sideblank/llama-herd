@@ -70,9 +70,18 @@ type Model struct {
 	// quantized cache does not work.
 	FlashAttention bool `json:"flash_attention,omitempty"`
 
-	// KVUnified shares one attention buffer across streams rather than giving each its
-	// own. Worth measuring both ways: streams fanned out from a common prompt share a
-	// large prefix and benefit, while unrelated requests generally do not.
+	// KVUnified shares one KV pool across streams instead of splitting it evenly.
+	//
+	// This is what decides whether a single request can exceed its even share. Split, the
+	// per-stream ceiling is context divided by streams and is fixed — a request cannot
+	// borrow capacity from idle slots, so a herd sized for four 128k streams wastes three
+	// quarters of its cache serving one long request. Unified, any stream may use the
+	// whole pool.
+	//
+	// The cost is that nothing is reserved. One long request can consume the pool and
+	// leave the rest of the herd nothing, where a split guarantees each slot its share.
+	// Shared prefixes also favour unified, which suits requests fanned out from a common
+	// prompt.
 	KVUnified bool `json:"kv_unified,omitempty"`
 
 	// MMProjPath is the multimodal projector accompanying a vision model. Without it the

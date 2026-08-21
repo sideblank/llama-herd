@@ -24,6 +24,11 @@ weights. When a target's KV cost alone exceeds the card, no quantization reaches
 differ fourfold in what they hold. `layers-that-cache × kv_heads × head_dim` is the number
 that predicts it.
 
+**A split context cannot be borrowed from.** With the default even split, the per-stream
+ceiling is fixed at startup and idle slots hold capacity nobody can use. Only a unified pool
+lets one request exceed its share — and then nothing is reserved, so admission must track
+real free capacity rather than a nominal per-stream limit.
+
 **Quantized KV requires flash attention.** Setting one without the other does not work. The
 manifest refuses the combination.
 

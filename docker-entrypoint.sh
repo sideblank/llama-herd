@@ -16,6 +16,7 @@
 #   LLAMA_HERD_KV_TYPE_V     value cache precision                (default: f16)
 #   LLAMA_HERD_FLASH_ATTN    flash attention, required by any quantized KV (default: false)
 #   LLAMA_HERD_MMPROJ_URL    multimodal projector, for vision models
+#   LLAMA_HERD_KV_UNIFIED    share one KV pool across streams          (default: false)
 #   LLAMA_HERD_SPEC_TYPE     speculative draft source: none | lookup   (default: none)
 #   LLAMA_HERD_SPEC_MAX      tokens proposed per step                  (default: 4)
 #   LLAMA_HERD_SPEC_PATTERN  lookup match length                       (default: 3)
@@ -95,6 +96,7 @@ if [ ! -f "$MANIFEST" ]; then
       "load_mtp": ${LLAMA_HERD_LOAD_MTP:-false},
       "kv_type_k": "${LLAMA_HERD_KV_TYPE_K:-f16}",
       "kv_type_v": "${LLAMA_HERD_KV_TYPE_V:-f16}",
+      "kv_unified": ${LLAMA_HERD_KV_UNIFIED:-false},
       "flash_attention": ${LLAMA_HERD_FLASH_ATTN:-false}${MMPROJ_JSON}${SPEC_JSON}
     }
   ]

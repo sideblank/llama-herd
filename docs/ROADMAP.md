@@ -201,6 +201,30 @@ right split is a property of the workload. What matters is that the manifest exp
 that a benchmark states which mode produced a number. A capacity-mode figure and a
 throughput-mode figure are not comparable.
 
+## 3c. Fixed shares or one pool
+
+A context is divided between streams in one of two ways, and the choice decides whether a
+single request can ever exceed its share.
+
+**Split** — the default — gives each stream `context / streams`, fixed. A herd configured for
+four 128k streams gives every request exactly 128k, and a request cannot borrow from idle
+slots. Three quarters of the cache sits unused while one long request is refused at 128k.
+
+**Unified** puts every stream in one pool, and any stream may use all of it. The same herd
+then serves one 512k request, or four 128k ones, or any mix that fits — allocation follows
+demand instead of a partition fixed at startup.
+
+The cost is that nothing is reserved. One long request can consume the pool and leave the rest
+of the herd nothing, where a split guarantees each slot its share. So unified suits a workload
+where request sizes vary and the herd is not adversarial with itself — which describes calls
+fanned out from one plan, and does not describe unrelated tenants.
+
+**Admission control has to change with it.** The scheduler currently admits against the
+per-stream ceiling, which under a split is a real reservation. Under one pool that ceiling is
+the whole cache, so four requests could each be admitted believing they may use everything,
+and the herd would then evict its way out of the overcommitment. Admitting against measured
+free capacity rather than a nominal per-stream limit is the work that makes unified safe.
+
 ## 4. Multi-GPU and heterogeneous fleets
 
 Not every deployment is one 5090. A stack of 3060s is a legitimate target, as is a mixed host —
