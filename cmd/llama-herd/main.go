@@ -27,12 +27,18 @@ var (
 	llamaCppRef = "unknown"
 )
 
+// osName and archName keep the runtime import in one place.
+func osName() string   { return runtime.GOOS }
+func archName() string { return runtime.GOARCH }
+
 func usage() {
 	fmt.Fprintf(os.Stderr, `llama-herd %s
 
 usage:
   llama-herd serve --manifest <file> [--addr <addr>]
                          host the manifest's models over an OpenAI-compatible API
+  llama-herd bench --manifest <file> [--model <name>] [--streams 1,2,4,8]
+                         measure throughput and emit a reproducible report
   llama-herd version     print version and build information
   llama-herd doctor      verify linkage and list the devices it can see
 
@@ -53,6 +59,9 @@ func main() {
 	switch flag.Arg(0) {
 	case "serve":
 		os.Exit(serve(flag.Args()[1:]))
+
+	case "bench":
+		os.Exit(benchCmd(flag.Args()[1:]))
 
 	case "version":
 		fmt.Printf("llama-herd %s\n", version)

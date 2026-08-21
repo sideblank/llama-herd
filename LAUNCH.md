@@ -68,7 +68,9 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for the reasoning behind each.
 
 - [x] Engine core: decode loop, slot table, continuous batching, admission control
 - [x] Chat-completions API with streaming — the integration surface every agent uses
-- [ ] Benchmark harness — reproducing the recorded throughput on real cards gates everything after
+- [x] Benchmark harness — `llama-herd bench`, reproducible and self-describing
+- [ ] **Run it on a real card** and publish results to `docs/results/`. Everything measured
+      so far is on a fake backend; no throughput claim is real until this happens.
 - [ ] KV quantization and a real KV budget, not a fixed slot count
 - [ ] Verify llama.cpp MTP/speculative support against a quant that retains `nextn` tensors
 - [ ] Multi-GPU placement and capacity-aware routing

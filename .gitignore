@@ -49,3 +49,8 @@ AGENTS.md
 .idea/
 .vscode/
 .internal-patterns
+
+# Local scratch scripts. scripts/ itself is tracked — CI runs check-commits.sh and
+# check-leaks.sh from there — so only this subdirectory is ignored.
+scripts/local/
+dev/

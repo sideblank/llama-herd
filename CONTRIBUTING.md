@@ -11,6 +11,11 @@ cd llama-herd
 `core.hooksPath` is local git config and is not carried by `git clone`, so this step is required
 once per clone. Without it the local hooks do not run.
 
+## Local scratch
+
+`scripts/local/` is gitignored. Put one-off drivers, deploy helpers and experiments there.
+The rest of `scripts/` is tracked and runs in CI.
+
 ## Commit rules
 
 The policy is an **allow-list**: anything not explicitly permitted is rejected. Nothing in the
