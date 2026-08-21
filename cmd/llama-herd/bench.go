@@ -53,6 +53,7 @@ func benchCmd(args []string) int {
 	warmup := fs.Int("warmup", 16, "warmup tokens, discarded")
 	promptFile := fs.String("prompt-file", "", "file whose contents are used as the prompt")
 	prompt := fs.String("prompt", "Write a detailed explanation of how memory bandwidth limits inference throughput.", "prompt text")
+	workload := fs.String("workload", "", "named workload shaped like real traffic; see --workload list")
 	jsonOut := fs.String("json", "", "write the machine-readable report here")
 	mdOut := fs.String("markdown", "", "write the publishable report here")
 	if err := fs.Parse(args); err != nil {
@@ -91,6 +92,26 @@ func benchCmd(args []string) int {
 	}
 
 	text := *prompt
+	if *workload != "" {
+		if *workload == "list" {
+			for _, w := range bench.Workloads() {
+				rep := "varied"
+				if w.Repetitive {
+					rep = "repetitive"
+				}
+				fmt.Printf("  %-12s %-11s %s\n", w.Name, rep, w.Description)
+			}
+			return 0
+		}
+		w, err := bench.WorkloadByName(*workload)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "bench:", err)
+			return 2
+		}
+		text = w.Prompt
+		fmt.Fprintf(os.Stderr, "workload %s (%s): %s\n", w.Name,
+			map[bool]string{true: "repetitive", false: "varied"}[w.Repetitive], w.Description)
+	}
 	if *promptFile != "" {
 		b, err := os.ReadFile(*promptFile)
 		if err != nil {
@@ -236,6 +257,7 @@ func remoteBench(args []string) int {
 	tokens := fs.Int("tokens", 128, "tokens per stream")
 	warmup := fs.Int("warmup", 16, "warmup tokens, discarded")
 	prompt := fs.String("prompt", "Write a detailed explanation of how memory bandwidth limits inference throughput.", "prompt text")
+	workload := fs.String("workload", "", "named workload shaped like real traffic")
 	// Some hosts authenticate with their own header rather than a bearer token.
 	hdr := fs.String("header", "", "extra header, as Name:Value; repeat with commas")
 	if err := fs.Parse(args); err != nil {
@@ -249,6 +271,17 @@ func remoteBench(args []string) int {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "bench:", err)
 		return 2
+	}
+
+	if *workload != "" {
+		w, err := bench.WorkloadByName(*workload)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "bench:", err)
+			return 2
+		}
+		*prompt = w.Prompt
+		fmt.Fprintf(os.Stderr, "workload %s (%s): %s\n", w.Name,
+			map[bool]string{true: "repetitive", false: "varied"}[w.Repetitive], w.Description)
 	}
 
 	ctx := context.Background()
