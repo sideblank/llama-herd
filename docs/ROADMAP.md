@@ -7,6 +7,26 @@ it is more useful than one without.
 
 ---
 
+## 0. Where this sits
+
+llama-herd is the **open engine**. It exposes a standard chat-completions API, so any agent with a
+configurable base URL — editor plugins, terminal agents, custom tooling — points at it and works.
+No per-agent integration, no plugins to write, no fork of anything.
+
+Orchestration that makes a modest local model behave like an ensemble is a **separate product**
+and is not part of this repository. The boundary is the API: the engine serves models, the layer
+above decides what to ask them.
+
+That split is deliberate. The engine is useful standalone — run a model, get an endpoint, point
+your agent at it — and nothing in it depends on the layer existing.
+
+**One consequence worth stating plainly, because it constrains what can be built on top:** this
+engine is open source, so anything sent to it is visible to whoever runs it. A user can build the
+engine with a log line and see every request verbatim. That is not a defect to be worked around —
+it is what open source means. Anything above this API should be designed on the assumption that
+individual requests are observable, and should keep its value in policy and models rather than in
+the text of any single prompt.
+
 ## 1. Throughput targets
 
 | Card | VRAM | Goal (aggregate decode) |
@@ -158,7 +178,9 @@ line needs its licence resolved before publication.
 ## 8. Sequencing
 
 1. Engine core: decode loop, slot table, continuous batching, admission control.
-2. HTTP endpoint with streaming.
+2. **Chat-completions API with streaming.** Promoted: it is what makes the engine usable by
+   anything at all, and every consumer above it depends on the contract. Getting it wrong is
+   expensive to change once agents point at it.
 3. Benchmark harness — reproducing the §1 numbers on real cards is the gate for everything after.
 4. KV quantization and a real KV budget (§3).
 5. MTP: verified support, then a quant that retains the head (§2).

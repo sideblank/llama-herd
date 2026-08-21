@@ -67,7 +67,7 @@ cheap now and expensive once history accumulates.
 See [docs/ROADMAP.md](docs/ROADMAP.md) for the reasoning behind each.
 
 - [ ] Engine core: decode loop, slot table, continuous batching, admission control
-- [ ] HTTP endpoint with streaming
+- [ ] Chat-completions API with streaming — the integration surface every agent uses
 - [ ] Benchmark harness — reproducing the recorded throughput on real cards gates everything after
 - [ ] KV quantization and a real KV budget, not a fixed slot count
 - [ ] Verify llama.cpp MTP/speculative support against a quant that retains `nextn` tensors
