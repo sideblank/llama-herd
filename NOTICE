@@ -1,10 +1,10 @@
 llama-herd
-Copyright (c) 2026 the llama-herd authors
+Copyright (c) 2026 Benjamin Goldman and the llama-herd authors
 
 Licensed under the Apache License, Version 2.0. See LICENSE.
 
-NOTE: the project's copyright holder of record is pending formation of the entity that will hold
-it; this line is to be updated at that point, together with .github/CLA.md.
+Chain of title for the imported runtime is recorded in PROVENANCE.md. Contributors retain
+copyright in their own contributions; there is no copyright assignment.
 
 This product includes third-party open-source software. Each component remains under its own
 licence; the list below is regenerated as dependencies change.

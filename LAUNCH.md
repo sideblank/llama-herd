@@ -10,10 +10,13 @@ grouped by their real deadline, which is not always "at launch".
 The moment engine code is copied in, decisions become facts recorded in history. These are cheap
 now and expensive later.
 
-- [ ] **Settle chain of title.** The source tree is marked `PROPRIETARY AND CONFIDENTIAL`,
-      copyright Benjamin Goldman, licensed to Liminal Intelligence. Publishing it under Apache-2.0
-      is a relicensing decision on that grant. Get it in writing before the first import commit —
-      not before going public, which is later and more expensive.
+- [x] **Chain of title recorded** in [PROVENANCE.md](PROVENANCE.md). Sole authorship verified
+      against the source history (54 commits, one author). The assignment and licence to Liminal
+      Intelligence are both drafted but **unexecuted**, so the copyright sits personally with
+      Benjamin Goldman and no counterparty consent is needed to release under Apache-2.0.
+- [ ] **Sign and date PROVENANCE.md** when the first import commit lands. Do not backdate.
+- [ ] **If the drafted IP assignment is later executed**, record the Apache-2.0 release as an
+      existing encumbrance in its schedule of assigned property, or the schedule will be wrong.
 - [ ] **Configure `.internal-patterns`** locally (gitignored) and set the `INTERNAL_PATTERNS`
       repository secret in GitHub, listing internal service names, hostnames, and infrastructure
       identifiers. Without it `scripts/check-leaks.sh` runs structural checks only. The list must
