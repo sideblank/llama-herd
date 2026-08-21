@@ -63,8 +63,15 @@ func SystemInfo() string { return C.GoString(C.llama_print_system_info()) }
 type ModelParams struct {
 	// NGPULayers is how many layers to place in VRAM. Negative means all of them.
 	NGPULayers int32
-	// MainGPU is the device index used when the model is not split.
+	// MainGPU is the device index that holds the whole model when SplitMode is
+	// SplitNone. Ignored otherwise.
 	MainGPU int32
+	// SplitMode selects how a model is spread across several devices.
+	SplitMode SplitMode
+	// TensorSplit gives the proportion of the model each device receives, indexed by
+	// device. Empty means split evenly. This is what makes a mixed host work: a 24 GB
+	// card and a 12 GB card should not receive equal shares.
+	TensorSplit []float32
 	// LoadMode selects mmap, mlock, direct I/O, or a combination. It replaced the
 	// separate boolean flags upstream.
 	LoadMode LoadMode
@@ -76,6 +83,21 @@ type ModelParams struct {
 	// nothing to load and speculative decoding through the MTP head is unavailable.
 	LoadMTP bool
 }
+
+// SplitMode selects how a model is distributed across devices.
+type SplitMode int32
+
+const (
+	// SplitNone keeps the whole model on MainGPU.
+	SplitNone SplitMode = C.LLAMA_SPLIT_MODE_NONE
+	// SplitLayer divides layers and KV cache across devices. The usual choice for a
+	// model too large for one card.
+	SplitLayer SplitMode = C.LLAMA_SPLIT_MODE_LAYER
+	// SplitRow divides layers and KV, using tensor parallelism where supported.
+	SplitRow SplitMode = C.LLAMA_SPLIT_MODE_ROW
+	// SplitTensor is full tensor parallelism.
+	SplitTensor SplitMode = C.LLAMA_SPLIT_MODE_TENSOR
+)
 
 // LoadMode selects how weights are brought into memory.
 type LoadMode int32
@@ -96,20 +118,27 @@ func DefaultModelParams() ModelParams {
 	return ModelParams{
 		NGPULayers: int32(c.n_gpu_layers),
 		MainGPU:    int32(c.main_gpu),
+		SplitMode:  SplitMode(c.split_mode),
 		LoadMode:   LoadMode(c.load_mode),
 		VocabOnly:  bool(c.vocab_only),
 		LoadMTP:    bool(c.load_mtp),
 	}
 }
 
-func (p ModelParams) c() C.struct_llama_model_params {
+// c builds the C params. The returned free function releases the tensor-split array and
+// must be called once the load has completed.
+func (p ModelParams) c() (C.struct_llama_model_params, func()) {
 	c := C.llama_model_default_params()
 	c.n_gpu_layers = C.int32_t(p.NGPULayers)
 	c.main_gpu = C.int32_t(p.MainGPU)
+	c.split_mode = C.enum_llama_split_mode(p.SplitMode)
 	c.load_mode = C.enum_llama_load_mode(p.LoadMode)
 	c.vocab_only = C.bool(p.VocabOnly)
 	c.load_mtp = C.bool(p.LoadMTP)
-	return c
+
+	split, free := cTensorSplit(p.TensorSplit)
+	c.tensor_split = split
+	return c, free
 }
 
 // Model is a set of weights resident on the device. One Model is shared by every stream
@@ -123,7 +152,10 @@ func LoadModel(path string, params ModelParams) (*Model, error) {
 	cpath := C.CString(path)
 	defer C.free(unsafe.Pointer(cpath))
 
-	m := C.llama_model_load_from_file(cpath, params.c())
+	cparams, freeSplit := params.c()
+	defer freeSplit()
+
+	m := C.llama_model_load_from_file(cpath, cparams)
 	if m == nil {
 		return nil, fmt.Errorf("llama: could not load model %q", path)
 	}

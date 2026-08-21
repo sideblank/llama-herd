@@ -116,10 +116,31 @@ budget rather than a fixed slot count. Levers to pursue, in order of expected va
 Not every deployment is one 5090. A stack of 3060s is a legitimate target, as is a mixed host —
 different cards, different capacities.
 
+**Upstream already provides the mechanics**, and the binding exposes them:
+
+| Mode | What it does |
+|------|--------------|
+| `SplitNone` | whole model on one device |
+| `SplitLayer` | layers and KV divided across devices |
+| `SplitRow` | layers and KV divided, with tensor parallelism where supported |
+| `SplitTensor` | full tensor parallelism |
+
+`TensorSplit` sets the proportion each device receives. That field is what makes a *mixed* host
+work rather than merely a multi-card one: a 24 GB card and a 12 GB card must not receive equal
+shares, and an even split silently fails on the smaller one.
+
+The binding also enumerates devices — name, description, type, and free/total memory — so
+placement can be decided from what is actually present. Integrated GPUs are reported separately
+from dedicated ones on purpose: an iGPU's memory is the host's, so its capacity number means
+something entirely different.
+
+Plan:
+
 - **Model-per-GPU placement** first: put each model wholly on the card that fits it. Simple, and
   it avoids interconnect entirely.
-- **Layer splitting across cards** for models that do not fit one card, accepting the interconnect
-  cost.
+- **Layer splitting** for models too large for one card, accepting the interconnect cost.
+- **Proportional splitting on mixed hosts**, derived from measured free memory rather than
+  assumed to be uniform.
 - **Capacity-aware routing**: a request goes to the card that can host it, accounting for both
   resident model and free KV.
 - Heterogeneous fleets mean **per-card manifests** — stream counts and context budgets sized to

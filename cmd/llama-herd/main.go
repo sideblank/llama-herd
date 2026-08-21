@@ -32,7 +32,7 @@ func usage() {
 
 usage:
   llama-herd version     print version and build information
-  llama-herd doctor      verify the llama.cpp library loads and links
+  llama-herd doctor      verify linkage and list the devices it can see
 
 `, version)
 }
@@ -59,6 +59,19 @@ func main() {
 		fmt.Printf("llama.cpp backend initialised — linkage OK (%s/%s)\n", runtime.GOOS, runtime.GOARCH)
 		fmt.Printf("built against: %s\n", llamaCppRef)
 		fmt.Printf("system: %s\n", llama.SystemInfo())
+
+		devs := llama.Devices()
+		fmt.Printf("\ndevices (%d, max split across %d):\n", len(devs), llama.MaxDevices())
+		for _, d := range devs {
+			fmt.Printf("  [%d] %-8s %-12s %s\n", d.Index, d.Type, d.Name, d.Description)
+			if d.TotalBytes > 0 {
+				fmt.Printf("       memory: %.1f GiB free of %.1f GiB\n",
+					float64(d.FreeBytes)/(1<<30), float64(d.TotalBytes)/(1<<30))
+			}
+		}
+		if len(llama.GPUs()) == 0 {
+			fmt.Println("\n  no dedicated-memory GPU found — this build will run on CPU")
+		}
 
 	default:
 		usage()
