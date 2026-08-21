@@ -139,17 +139,27 @@ func (r *Report) WriteMarkdown(w io.Writer) error {
 	}
 	if anyLib {
 		b.WriteString("\n### Speculation and prefill\n\n")
-		b.WriteString("| Streams | Prefill tok/s | Decode passes | Tokens per pass | Speculation |\n")
-		b.WriteString("|--------:|--------------:|--------------:|----------------:|:------------|\n")
+		b.WriteString("| Streams | Prefill tok/s | Decode passes | Tokens per pass | Drafted | Accepted | Acceptance | Speculation |\n")
+		b.WriteString("|--------:|--------------:|--------------:|----------------:|--------:|---------:|-----------:|:------------|\n")
 		for _, res := range r.Results {
 			if res.Library == nil {
 				continue
 			}
-			fmt.Fprintf(&b, "| %d | %.1f | %d | %.2f | %s |\n",
+			acc := "-"
+			if res.DraftsProposed > 0 {
+				acc = fmt.Sprintf("%.1f%%", res.AcceptanceRate*100)
+			}
+			fmt.Fprintf(&b, "| %d | %.1f | %d | %.2f | %d | %d | %s | %s |\n",
 				res.Streams, res.Library.PromptTokPerSec, res.DecodePasses,
-				res.TokensPerPass, speculationVerdict(res))
+				res.TokensPerPass, res.DraftsProposed, res.DraftsAccepted, acc,
+				speculationVerdict(res))
 		}
-		b.WriteString("\nOne decode pass serves every active stream at once, so **tokens per pass** is\n")
+		b.WriteString("\n**Acceptance** is the fraction of drafted tokens the target model kept, and it is\n")
+		b.WriteString("the number that decides whether speculation earns its cost. It does not move with\n")
+		b.WriteString("prompt length, stream count or host load, so it compares across runs that nothing\n")
+		b.WriteString("else compares across. Drafting with near-zero acceptance is strictly worse than not\n")
+		b.WriteString("drafting: the batch space is spent and the tokens are thrown away.\n\n")
+		b.WriteString("One decode pass serves every active stream at once, so **tokens per pass** is\n")
 		b.WriteString("normally about the number of streams running. A speculative head that lands drafts\n")
 		b.WriteString("pushes it higher, so the ratio above the stream count is the acceptance rate.\n\n")
 		b.WriteString("At one stream the reading is direct: 1.00 means no speculation, and anything above\n")
@@ -179,8 +189,22 @@ func (r *Report) WriteMarkdown(w io.Writer) error {
 
 // ms formats a duration for the report, keeping sub-millisecond values legible rather than
 // rounding them to a misleading "0 ms".
-// speculationVerdict reads tokens-per-pass against the stream count.
+// speculationVerdict says whether drafting ran and whether it paid.
+//
+// It prefers the draft counters, which mean exactly one thing, over tokens-per-pass, which
+// moves with prompt length and stream mix. The ratio is the fallback for a run recorded
+// before the counters existed, not the primary reading.
 func speculationVerdict(r *Result) string {
+	if r.DraftsProposed > 0 {
+		switch {
+		case r.AcceptanceRate >= 0.5:
+			return fmt.Sprintf("**active**, %.0f%% accepted", r.AcceptanceRate*100)
+		case r.AcceptanceRate > 0:
+			return fmt.Sprintf("active but weak, %.0f%% accepted", r.AcceptanceRate*100)
+		default:
+			return "**drafting, nothing accepted**"
+		}
+	}
 	if r.DecodePasses == 0 {
 		return "not measured"
 	}

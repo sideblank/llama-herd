@@ -154,6 +154,13 @@ type Result struct {
 	MTPLoaded bool `json:"mtp_loaded"`
 	OnGPU     bool `json:"on_gpu"`
 
+	// DraftsProposed and DraftsAccepted count speculative tokens offered and kept during
+	// this measurement, and AcceptanceRate is their ratio. Zero proposed means no drafter
+	// ran — which is what a stripped prediction head looks like from outside.
+	DraftsProposed uint64  `json:"drafts_proposed"`
+	DraftsAccepted uint64  `json:"drafts_accepted"`
+	AcceptanceRate float64 `json:"acceptance_rate"`
+
 	// TokensPerPass is tokens produced per forward pass. One pass serves every active
 	// stream, so this is normally about the stream count; above it means a speculative
 	// head is landing drafts.
@@ -182,7 +189,8 @@ func Run(ctx context.Context, eng *engine.Engine, cfg Config) (*Result, error) {
 	}
 
 	// Sample the pass counter before measuring so warmup passes are excluded.
-	passesBefore := eng.Stats().DecodePasses
+	statsBefore := eng.Stats()
+	passesBefore := statsBefore.DecodePasses
 
 	var (
 		mu        sync.Mutex
@@ -251,11 +259,19 @@ func Run(ctx context.Context, eng *engine.Engine, cfg Config) (*Result, error) {
 		lp := ps.LibraryPerf(uint64(totalToks))
 		res.Library = &lp
 	}
-	if st := eng.Stats(); st.DecodePasses > passesBefore {
+	st := eng.Stats()
+	if st.DecodePasses > passesBefore {
 		res.DecodePasses = st.DecodePasses - passesBefore
 		if res.DecodePasses > 0 {
 			res.TokensPerPass = float64(totalToks) / float64(res.DecodePasses)
 		}
+	}
+	// Differenced against the start of this run, so warmup and any earlier measurement in
+	// the same sweep do not dilute the rate this configuration actually achieved.
+	res.DraftsProposed = st.DraftsProposed - statsBefore.DraftsProposed
+	res.DraftsAccepted = st.DraftsAccepted - statsBefore.DraftsAccepted
+	if res.DraftsProposed > 0 {
+		res.AcceptanceRate = float64(res.DraftsAccepted) / float64(res.DraftsProposed)
 	}
 
 	res.TTFTp50 = percentile(ttfts, 0.50)

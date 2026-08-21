@@ -68,6 +68,8 @@ func (r *Remote) do(ctx context.Context, method, path string, body []byte) (*htt
 type ServerCounters struct {
 	TokensGenerated uint64
 	DecodePasses    uint64
+	DraftsProposed  uint64
+	DraftsAccepted  uint64
 	RequestsTotal   uint64
 	Evictions       uint64
 	Accelerated     bool
@@ -98,6 +100,8 @@ func (r *Remote) Counters(ctx context.Context) (ServerCounters, error) {
 			Stats *struct {
 				TokensGenerated uint64 `json:"tokens_generated"`
 				DecodePasses    uint64 `json:"decode_passes"`
+				DraftsProposed  uint64 `json:"drafts_proposed"`
+				DraftsAccepted  uint64 `json:"drafts_accepted"`
 				RequestsTotal   uint64 `json:"requests_total"`
 				EvictionsTotal  uint64 `json:"evictions_total"`
 			} `json:"stats"`
@@ -125,6 +129,8 @@ func (r *Remote) Counters(ctx context.Context) (ServerCounters, error) {
 		if m.Stats != nil {
 			out.TokensGenerated = m.Stats.TokensGenerated
 			out.DecodePasses = m.Stats.DecodePasses
+			out.DraftsProposed = m.Stats.DraftsProposed
+			out.DraftsAccepted = m.Stats.DraftsAccepted
 			out.RequestsTotal = m.Stats.RequestsTotal
 			out.Evictions = m.Stats.EvictionsTotal
 		}
@@ -282,6 +288,14 @@ func RunRemote(ctx context.Context, r *Remote, cfg Config) (*Result, error) {
 	// The server's own counters. These are the figures a contended host cannot distort,
 	// because they are ratios of counts rather than rates against wall clock.
 	res.DecodePasses = after.DecodePasses - before.DecodePasses
+	// Differenced, not read absolute: the server may have served other traffic before this
+	// run, and a lifetime ratio would report that traffic's acceptance rather than this
+	// workload's.
+	res.DraftsProposed = after.DraftsProposed - before.DraftsProposed
+	res.DraftsAccepted = after.DraftsAccepted - before.DraftsAccepted
+	if res.DraftsProposed > 0 {
+		res.AcceptanceRate = float64(res.DraftsAccepted) / float64(res.DraftsProposed)
+	}
 	produced := after.TokensGenerated - before.TokensGenerated
 	if res.DecodePasses > 0 {
 		res.TokensPerPass = float64(produced) / float64(res.DecodePasses)
