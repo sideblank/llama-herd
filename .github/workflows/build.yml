@@ -72,10 +72,16 @@ jobs:
           set -euo pipefail
           export CGO_CFLAGS="-I$RUNNER_TEMP/prefix/include"
           export CGO_LDFLAGS="-L$RUNNER_TEMP/prefix/lib"
+          # -L tells the linker where to look; it does not tell the loader. The binding
+          # package now has tests, so a test binary is linked and RUN, and without this it
+          # fails at startup on a missing libllama.so rather than on anything it asserts.
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          export DYLD_LIBRARY_PATH="$RUNNER_TEMP/prefix/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
           gofmt -l . | tee /tmp/unformatted
           test ! -s /tmp/unformatted || { echo "gofmt found unformatted files"; exit 1; }
           go vet ./...
           go build ./...
           # The scheduler is backend-agnostic on purpose, so its tests run on every
-          # platform with no GPU and no model present.
+          # platform with no GPU and no model present. The binding package's tests cover
+          # capacity arithmetic only — they need the library present to link, not a GPU.
           go test ./... -race -count=1
