@@ -392,6 +392,12 @@ func (r *Runner) SetSampling(seq engine.SeqID, p *engine.SamplingParams) error {
 	return nil
 }
 
+// TrimSeq drops a sequence's cells from a position onward, keeping the prefix. Used to
+// discard rejected speculative tokens without disturbing what was accepted.
+func (r *Runner) TrimSeq(seq engine.SeqID, from engine.Pos) {
+	r.ctx.SeqRm(SeqID(seq), Pos(from), -1)
+}
+
 // FreeSeq drops the sequence's KV cells and clears its sampler.
 //
 // Resetting the sampler is not optional: the chain holds the penalty window, so a reused

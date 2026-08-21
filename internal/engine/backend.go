@@ -64,6 +64,28 @@ type MediaBackend interface {
 	MediaMarker() string
 }
 
+// Drafter proposes continuation tokens so several can be verified in one forward pass.
+//
+// The draft source is deliberately abstract. A small companion model, a trained
+// multi-token-prediction head, or an n-gram cache all produce the same thing — candidate
+// tokens — and the verification loop does not care which. Keeping the interface narrow means
+// the loop is written once.
+type Drafter interface {
+	// Draft proposes up to n continuation tokens for seq, following last at pos.
+	// Returning fewer, including none, is valid and simply means less speculation.
+	Draft(seq SeqID, last Token, pos Pos, n int) ([]Token, error)
+
+	// Accept reports how many proposals the target kept and which token it chose instead
+	// at the first divergence, so the drafter can keep its own state aligned.
+	Accept(seq SeqID, accepted int, corrected Token) error
+
+	// Release discards any state held for a finished sequence.
+	Release(seq SeqID)
+
+	// MaxDraft bounds how many tokens will be proposed at once.
+	MaxDraft() int
+}
+
 // Renderer turns messages into the prompt string a specific model expects.
 //
 // Unlike Backend, this is called from request goroutines and must be safe for concurrent
@@ -127,6 +149,14 @@ type Backend interface {
 	// Sampler state is per-sequence, so this replaces that sequence's chain and must
 	// not disturb any other stream's.
 	SetSampling(seq SeqID, p *SamplingParams) error
+
+	// TrimSeq drops a sequence's KV cells from position p onward, keeping everything
+	// before it.
+	//
+	// Speculation needs this: drafted tokens are written into the cache to be verified,
+	// and the rejected tail must be removed or the sequence continues from a state the
+	// model never actually chose.
+	TrimSeq(seq SeqID, from Pos)
 
 	// FreeSeq drops a sequence's KV cells, returning its capacity to the pool.
 	FreeSeq(seq SeqID)

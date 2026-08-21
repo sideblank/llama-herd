@@ -58,6 +58,10 @@ func (s *Scripted) BatchCap() int32   { return s.batchCap }
 func (s *Scripted) BatchLen() int32   { return s.staged }
 func (s *Scripted) BatchClear()       { s.staged = 0 }
 func (s *Scripted) EOS() engine.Token { return s.eos }
+
+// TrimSeq is accepted and ignored: the script is positional, not stateful.
+func (s *Scripted) TrimSeq(_ engine.SeqID, _ engine.Pos) {}
+
 func (s *Scripted) FreeSeq(seq engine.SeqID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

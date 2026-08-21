@@ -36,10 +36,17 @@ type fakeBackend struct {
 	maxSeen int32
 	// freed counts FreeSeq calls per sequence.
 	freed map[SeqID]int
+	// trims records TrimSeq calls.
+	trims []trim
 	// sampling records the last params installed per sequence.
 	sampling map[SeqID]*SamplingParams
 	// samplingCalls counts SetSampling calls per sequence.
 	samplingCalls map[SeqID]int
+}
+
+type trim struct {
+	seq  SeqID
+	from Pos
 }
 
 type staged struct {
@@ -133,6 +140,13 @@ func (f *fakeBackend) SetSampling(seq SeqID, p *SamplingParams) error {
 	f.sampling[seq] = p
 	f.samplingCalls[seq]++
 	return nil
+}
+
+// trimmed records TrimSeq calls so tests can assert rejected drafts are rolled back.
+func (f *fakeBackend) TrimSeq(seq SeqID, from Pos) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.trims = append(f.trims, trim{seq, from})
 }
 
 func (f *fakeBackend) FreeSeq(seq SeqID) {

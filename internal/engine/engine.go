@@ -86,6 +86,11 @@ type slot struct {
 	prompt    string
 	prefilled bool
 
+	// draft holds the tokens proposed for this tick, and specIdx where each was staged in
+	// the batch. Verification samples at those indices in order.
+	draft   []Token
+	specIdx []int32
+
 	// buf accumulates bytes that are not yet a complete UTF-8 sequence, and text used
 	// for stop-sequence matching.
 	buf  []byte
@@ -103,6 +108,8 @@ type Engine struct {
 
 	wake chan struct{}
 
+	drafter Drafter
+
 	closed bool
 
 	c counters
@@ -112,6 +119,11 @@ type Engine struct {
 type Config struct {
 	// MaxQueue bounds requests waiting for a slot. 0 means unbounded.
 	MaxQueue int
+
+	// Drafter enables speculative decoding when set. Each speculating stream consumes
+	// several batch entries instead of one, so it trades batch capacity for the chance to
+	// produce several tokens from a single pass.
+	Drafter Drafter
 }
 
 // New creates an engine over be.
@@ -121,6 +133,7 @@ func New(be Backend, cfg Config) *Engine {
 		be:      be,
 		free:    make([]SeqID, 0, n),
 		maxWait: cfg.MaxQueue,
+		drafter: cfg.Drafter,
 		wake:    make(chan struct{}, 1),
 	}
 	for i := 0; i < n; i++ {
@@ -338,8 +351,13 @@ func (e *Engine) tick(active map[SeqID]*slot) error {
 		s.hasLogits = true
 	}
 
-	// Pass 1 — one decode token per primed slot. These are already resident streams and
-	// must be served before any new prompt work is admitted into the batch.
+	// Pass 1 — the active streams. Each stages its next token, and when a drafter is
+	// present it also stages that draft's proposals so several positions are verified in
+	// the same forward pass.
+	//
+	// Every staged entry consumes batch budget, drafts included. Counting only the real
+	// token would let a speculating stream overrun the batch, which the backend rejects
+	// and which kills the loop rather than degrading it.
 	for _, s := range active {
 		if !s.primed || s.ctx.Err() != nil {
 			continue
@@ -347,13 +365,40 @@ func (e *Engine) tick(active map[SeqID]*slot) error {
 		if e.be.BatchLen() >= budget {
 			break
 		}
+
+		s.draft = s.draft[:0]
+		s.specIdx = s.specIdx[:0]
+
 		idx := e.be.BatchLen()
 		if err := e.be.BatchAdd(s.next, s.pos, s.seq, true); err != nil {
 			break
 		}
 		s.batchIdx = idx
 		s.hasLogits = true
+		s.specIdx = append(s.specIdx, idx)
 		s.pos++
+
+		if e.drafter == nil {
+			continue
+		}
+		room := int(budget - e.be.BatchLen())
+		if n := min(e.drafter.MaxDraft(), room); n > 0 {
+			proposed, err := e.drafter.Draft(s.seq, s.next, s.pos, n)
+			if err != nil {
+				// A failing drafter degrades to ordinary decoding rather than
+				// failing the request: speculation is an optimisation.
+				proposed = nil
+			}
+			for _, t := range proposed {
+				i := e.be.BatchLen()
+				if e.be.BatchAdd(t, s.pos, s.seq, true) != nil {
+					break
+				}
+				s.draft = append(s.draft, t)
+				s.specIdx = append(s.specIdx, i)
+				s.pos++
+			}
+		}
 	}
 
 	// Pass 2 — prefill, chunked into whatever budget is left.
@@ -418,29 +463,32 @@ func (e *Engine) harvest(active map[SeqID]*slot) error {
 			s.sampledOnce = true
 		}
 
-		tok, err := e.be.SampleAt(s.seq, s.batchIdx)
+		// Verify every position staged for this slot, in order. Without speculation
+		// there is exactly one; with it, the first is the real token and the rest are
+		// proposals that hold only while the target agrees.
+		accepted, stop, reason, err := e.verify(s)
 		if err != nil {
-			e.finish(active, seq, "", fmt.Errorf("sample: %w", err))
+			e.finish(active, seq, "", err)
 			continue
 		}
 
-		if eos := e.be.EOS(); eos >= 0 && tok == eos {
-			e.finish(active, seq, ReasonEOS, nil)
-			continue
+		// Rewind the positions the target did not take. The drafts were written into
+		// the cache to be checked, and leaving a rejected tail there would continue the
+		// sequence from a state the model never chose.
+		kept := accepted + 1
+		if kept < len(s.specIdx) {
+			s.pos -= Pos(len(s.specIdx) - kept)
+			e.be.TrimSeq(s.seq, s.pos)
+		}
+		if e.drafter != nil && len(s.draft) > 0 {
+			_ = e.drafter.Accept(s.seq, accepted, s.next)
 		}
 
-		piece, err := e.be.Piece(tok)
-		if err != nil {
-			e.finish(active, seq, "", fmt.Errorf("detokenize: %w", err))
+		if stop != "" {
+			e.finish(active, seq, stop, nil)
 			continue
 		}
-
-		s.next = tok
-		s.generated++
-		e.c.tokens.Add(1)
-		if text, ok := s.consume(piece); ok {
-			s.emit(Event{Text: text})
-		}
+		_ = reason
 
 		switch {
 		case s.hitStop():
@@ -452,6 +500,57 @@ func (e *Engine) harvest(active map[SeqID]*slot) error {
 		}
 	}
 	return nil
+}
+
+// verify samples each staged position and accepts the longest prefix the target agrees with.
+//
+// Returns how many drafted tokens were accepted, and a stop reason if generation ended part
+// way through. The token at a divergence is the target's own choice, which is why a rejected
+// draft still yields one real token: speculation never costs a step, it only sometimes saves
+// several.
+func (e *Engine) verify(s *slot) (accepted int, stop string, reason string, err error) {
+	eos := e.be.EOS()
+
+	for i, idx := range s.specIdx {
+		tok, sErr := e.be.SampleAt(s.seq, idx)
+		if sErr != nil {
+			return accepted, "", "", fmt.Errorf("sample: %w", sErr)
+		}
+
+		if eos >= 0 && tok == eos {
+			return accepted, ReasonEOS, "", nil
+		}
+
+		piece, pErr := e.be.Piece(tok)
+		if pErr != nil {
+			return accepted, "", "", fmt.Errorf("detokenize: %w", pErr)
+		}
+
+		s.next = tok
+		s.generated++
+		e.c.tokens.Add(1)
+		if text, ok := s.consume(piece); ok {
+			s.emit(Event{Text: text})
+		}
+
+		if s.hitStop() {
+			return accepted, ReasonStopSeq, "", nil
+		}
+		if s.maxTokens > 0 && s.generated >= s.maxTokens {
+			return accepted, ReasonLength, "", nil
+		}
+
+		// The next staged position holds a proposal, and it is only usable if the target
+		// produced exactly that token here. On divergence the target's own token stands
+		// and everything after it is discarded.
+		if i < len(s.draft) {
+			if s.draft[i] != tok {
+				return accepted, "", "", nil
+			}
+			accepted++
+		}
+	}
+	return accepted, "", "", nil
 }
 
 // consume appends piece and returns any text that is now a complete UTF-8 sequence.
@@ -493,6 +592,9 @@ func (e *Engine) finish(active map[SeqID]*slot, seq SeqID, reason string, err er
 	}
 	delete(active, seq)
 	e.c.active.Add(-1)
+	if e.drafter != nil {
+		e.drafter.Release(s.seq)
+	}
 	if err != nil {
 		e.c.failed.Add(1)
 	}

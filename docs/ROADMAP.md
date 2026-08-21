@@ -104,10 +104,31 @@ Route 3 is implementable now and is the sane first step: it makes the draft-veri
 and measurable against any model, and the loop is the same regardless of where drafts come
 from. Route 1 then swaps the draft source once the loop exists.
 
+**The draft-verify loop is built.** The engine stages a stream's next token together with
+whatever a drafter proposes, verifies every position in one forward pass, accepts the longest
+prefix the target agrees with, and rewinds the cache past the divergence. A stream that
+accepts drafts produces several tokens from a single pass, which is exactly what
+tokens-per-pass measures.
+
+Three properties it holds, each tested:
+
+- **A wrong draft costs nothing but batch space.** The token at a divergence is the target's
+  own choice, so a rejected draft still yields one real token. Speculation never costs a
+  step; it only sometimes saves several.
+- **Drafts consume batch budget like any other entry.** Counting only the real token would let
+  a speculating stream overrun the batch, which the backend rejects outright rather than
+  degrading.
+- **A failing drafter degrades to ordinary decoding.** Speculation is an optimisation, so a
+  broken draft source must not fail the request.
+
+The draft source is abstract on purpose: a companion model, a trained head, or an n-gram cache
+all produce candidate tokens, and the loop does not care which.
+
 Work items:
 
-- **Implement the draft-verify loop** with a draft model, using public API only. The loop is
-  the reusable part; the draft source is swappable.
+- **A draft-model source** using public API, which works today on any model.
+- **An MTP source**, once the drafting API is reachable — this is now a component swap rather
+  than a feature build.
 - Decide how a draft context shares the KV budget. It is a second context over the same
   weights, so its cache competes with the target's for the same VRAM.
 - Confirm `load_mtp` finds the tensors in each candidate quant, which is already measurable.
