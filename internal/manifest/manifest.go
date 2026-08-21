@@ -86,6 +86,22 @@ type Model struct {
 	MaxQueue int `json:"max_queue,omitempty"`
 
 	Sampling Sampling `json:"sampling,omitempty"`
+
+	// Speculation configures drafting for this model. Omitted means none.
+	Speculation *Speculation `json:"speculation,omitempty"`
+}
+
+// Speculation selects a draft source and how far ahead it proposes.
+type Speculation struct {
+	// Type is the draft source. "lookup" predicts from the sequence's own context and
+	// costs no memory; it contributes only where output repeats context.
+	Type string `json:"type"`
+	// MaxDraft bounds tokens proposed per step. Larger drafts win more when they land and
+	// waste more batch space when they do not, so this trades against stream count.
+	MaxDraft int `json:"max_draft,omitempty"`
+	// Pattern is the match length for lookup drafting. Shorter patterns fire constantly
+	// and are usually wrong; longer ones rarely fire outside heavily repeated text.
+	Pattern int `json:"pattern,omitempty"`
 }
 
 // Sampling mirrors the sampler settings, with pointers so an omitted field is
@@ -225,6 +241,25 @@ func (m *Manifest) Validate() error {
 			if mm.SplitMode == "" || mm.SplitMode == SplitNone {
 				problems = append(problems, where+
 					": tensor_split has no effect unless split_mode is layer, row or tensor")
+			}
+		}
+
+		if sp := mm.Speculation; sp != nil {
+			switch sp.Type {
+			case "", "none", "lookup":
+			default:
+				problems = append(problems, fmt.Sprintf(
+					"%s: speculation type %q is not one of none, lookup", where, sp.Type))
+			}
+			// Every draft occupies a batch entry, so a full herd drafting at once needs
+			// room for all of it or the batch overruns.
+			if sp.MaxDraft > 0 && mm.Streams > 0 && mm.Batch > 0 {
+				need := mm.Streams * uint32(sp.MaxDraft+1)
+				if need > mm.Batch {
+					problems = append(problems, fmt.Sprintf(
+						"%s: %d streams drafting %d tokens each needs a batch of %d, but batch is %d",
+						where, mm.Streams, sp.MaxDraft, need, mm.Batch))
+				}
 			}
 		}
 

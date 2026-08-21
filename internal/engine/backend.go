@@ -86,6 +86,16 @@ type Drafter interface {
 	MaxDraft() int
 }
 
+// Seeder is an optional Drafter capability: a drafter that predicts from context wants the
+// prompt, not just the tokens generated after it.
+//
+// This is where most of the benefit is for a lookup-based drafter — an agent's prompt carries
+// the file it is editing, the schema it is filling, the transcript it is continuing, and the
+// output repeats large spans of it.
+type Seeder interface {
+	Seed(seq SeqID, tokens []Token)
+}
+
 // Renderer turns messages into the prompt string a specific model expects.
 //
 // Unlike Backend, this is called from request goroutines and must be safe for concurrent

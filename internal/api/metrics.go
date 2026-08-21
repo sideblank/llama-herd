@@ -72,6 +72,12 @@ func (s *Server) metrics(w http.ResponseWriter, _ *http.Request) {
 		c("llama_herd_requests_failed_total", "Requests that ended in error.", float64(st.RequestsFailed), lbl...)
 		c("llama_herd_tokens_generated_total", "Tokens generated.", float64(st.TokensGenerated), lbl...)
 		c("llama_herd_prompt_tokens_total", "Prompt tokens accepted.", float64(st.PromptTokens), lbl...)
+		c("llama_herd_drafts_proposed_total", "Speculative tokens offered to the target.",
+			float64(st.DraftsProposed), lbl...)
+		c("llama_herd_drafts_accepted_total", "Speculative tokens the target kept. The ratio to proposed is the acceptance rate, unaffected by prompt length, stream count or host contention.",
+			float64(st.DraftsAccepted), lbl...)
+		g("llama_herd_draft_acceptance_rate", "Fraction of proposed draft tokens accepted. Zero with no drafter; proposals with no acceptances means batch space spent for nothing.",
+			st.AcceptanceRate(), lbl...)
 		c("llama_herd_evictions_total", "Streams ended because the KV cache filled. A rising count means the context budget is over-committed.",
 			float64(st.EvictionsTotal), lbl...)
 	}

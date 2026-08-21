@@ -304,6 +304,12 @@ func (e *Engine) admit(active map[SeqID]*slot) {
 		s.sampledOnce = false
 		active[seq] = s
 		e.c.active.Add(1)
+
+		// A context-predicting drafter wants the prompt, which is where most of its
+		// hits come from.
+		if sd, ok := e.drafter.(Seeder); ok && sd != nil {
+			sd.Seed(seq, s.pending)
+		}
 	}
 }
 
@@ -397,6 +403,7 @@ func (e *Engine) tick(active map[SeqID]*slot) error {
 				s.draft = append(s.draft, t)
 				s.specIdx = append(s.specIdx, i)
 				s.pos++
+				e.c.proposed.Add(1)
 			}
 		}
 	}
@@ -481,6 +488,7 @@ func (e *Engine) harvest(active map[SeqID]*slot) error {
 			e.be.TrimSeq(s.seq, s.pos)
 		}
 		if e.drafter != nil && len(s.draft) > 0 {
+			e.c.acceptedD.Add(uint64(accepted))
 			_ = e.drafter.Accept(s.seq, accepted, s.next)
 		}
 

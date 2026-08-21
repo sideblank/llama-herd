@@ -139,6 +139,23 @@ Images must be inlined as data URLs. Remote URLs are refused: fetching a caller-
 server-side would let anyone reach whatever the server can, including cloud metadata endpoints
 and private networks.
 
+**Speculative decoding** is available and costs no memory. Lookup drafting predicts from the
+sequence's own context — the prompt included — and proposes continuations that are verified in
+the same forward pass:
+
+```json
+"speculation": { "type": "lookup", "max_draft": 4, "pattern": 3 }
+```
+
+It contributes where output repeats context, which is most of what an agent does: editing a
+file that is in the prompt, filling a schema, continuing a transcript. On repetitive content
+it reaches high acceptance; on free-form prose it finds no match and proposes nothing. A
+rejected proposal costs batch space and never a token, since the token at a divergence is the
+model's own choice.
+
+`GET /metrics` reports `llama_herd_draft_acceptance_rate`, which is the number that says
+whether it is earning that batch space.
+
 Per-request sampling is honoured — `temperature`, `top_p`, `top_k`, `min_p`, the penalties and
 `seed` layer over the model's manifest defaults, and an explicit `"temperature": 0` means greedy
 rather than "unset".

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/sideblank/llama-herd/internal/api"
+	"github.com/sideblank/llama-herd/internal/draft"
 	"github.com/sideblank/llama-herd/internal/engine"
 	"github.com/sideblank/llama-herd/internal/llama"
 	"github.com/sideblank/llama-herd/internal/manifest"
@@ -158,7 +159,17 @@ func serve(args []string) int {
 			log.Printf("  %s has no chat template — chat requests for it will be refused", mm.Name)
 		}
 
-		e := engine.New(r, engine.Config{MaxQueue: mm.MaxQueue})
+		ecfg := engine.Config{MaxQueue: mm.MaxQueue}
+		if sp := mm.Speculation; sp != nil && sp.Type == "lookup" {
+			lk := draft.NewLookup(sp.MaxDraft)
+			if sp.Pattern > 0 {
+				lk.N = sp.Pattern
+			}
+			ecfg.Drafter = lk
+			log.Printf("  %s speculation: lookup, up to %d tokens, pattern %d",
+				mm.Name, lk.MaxDraft(), lk.N)
+		}
+		e := engine.New(r, ecfg)
 		if err := reg.Add(mm.Name, e, rend); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1

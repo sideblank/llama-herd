@@ -93,6 +93,24 @@ speculation. Reading 1.0 as the baseline reports speculation on every multi-stre
 **A model carrying MTP layers that reads at the baseline is the failure worth catching.** The
 head is loaded, occupying VRAM, and contributing nothing.
 
+## Speculation
+
+**Measure acceptance directly; do not infer it from tokens per pass.** A forward pass can
+carry prefill for one stream and decode for another, and a prefill pass produces no tokens at
+all, so the ratio moves with prompt length and stream mix rather than with speculation. It
+read *below one* on a long prompt with a short answer. Count proposals and acceptances
+instead: their ratio means exactly one thing.
+
+**A rejected draft costs batch space, never a token.** The token at a divergence is the
+target's own choice, so a wrong proposal still yields one real token. Speculation cannot slow
+generation down; it can only waste batch capacity.
+
+**Drafts consume batch budget like any other entry.** Counting only the real token lets a
+speculating stream overrun the batch, which the backend rejects outright.
+
+**A drafter holds per-sequence state and must be released** when a slot finishes, for the same
+reason a sampler is reset.
+
 ## Vision
 
 **The prompt must contain the media marker.** Without it the tokenizer produces chunks with no

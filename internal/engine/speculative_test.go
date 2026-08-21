@@ -210,3 +210,54 @@ func TestFinishedSlotReleasesDrafterState(t *testing.T) {
 		t.Fatalf("released sequence %d, want 0", d.released[0])
 	}
 }
+
+// The acceptance rate must be counted, not inferred from tokens per pass — that ratio moves
+// with prompt length and stream mix, and reads below one on a long prompt with a short answer.
+func TestAcceptanceRateIsCountedDirectly(t *testing.T) {
+	f := newFake(1, 32)
+	f.script[0] = []Token{'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'}
+	// Proposes 'b' then 'z'. The first matches what the target emits, the second does not,
+	// so exactly half of each round's proposals should be accepted.
+	d := &scriptedDrafter{propose: []Token{'b', 'z'}, max: 2}
+
+	e := New(f, Config{Drafter: d})
+	defer run(t, e)()
+
+	s, err := e.Submit(context.Background(), Request{Prompt: "x", MaxTokens: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, s)
+
+	st := e.Stats()
+	if st.DraftsProposed == 0 {
+		t.Fatal("no drafts were counted as proposed")
+	}
+	if st.DraftsAccepted == 0 {
+		t.Fatal("no drafts were counted as accepted, though the first proposal matches")
+	}
+	if st.DraftsAccepted > st.DraftsProposed {
+		t.Fatalf("accepted %d of %d proposed", st.DraftsAccepted, st.DraftsProposed)
+	}
+	if r := st.AcceptanceRate(); r <= 0 || r > 1 {
+		t.Fatalf("acceptance rate = %.2f, want a fraction", r)
+	}
+}
+
+func TestNoDrafterProposesNothing(t *testing.T) {
+	f := newFake(1, 16)
+	f.script[0] = []Token{'a', 'b'}
+	e := New(f, Config{})
+	defer run(t, e)()
+
+	s, _ := e.Submit(context.Background(), Request{Prompt: "x", MaxTokens: 2})
+	collect(t, s)
+
+	st := e.Stats()
+	if st.DraftsProposed != 0 || st.DraftsAccepted != 0 {
+		t.Fatalf("proposed=%d accepted=%d without a drafter", st.DraftsProposed, st.DraftsAccepted)
+	}
+	if st.AcceptanceRate() != 0 {
+		t.Fatal("acceptance rate should be zero when nothing was proposed")
+	}
+}
