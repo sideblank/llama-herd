@@ -129,3 +129,33 @@ func TestSamplingZeroIsDistinguishableFromUnset(t *testing.T) {
 		t.Fatal("an omitted temperature should be nil, not 0")
 	}
 }
+
+// MTP drafting reads from a prediction head that load_mtp is what makes resident. Asking for
+// the draft source without the head is a configuration that starts, serves, and never
+// speculates — the failure is invisible unless the manifest refuses it.
+func TestMTPSpeculationWithoutLoadMTPRejected(t *testing.T) {
+	_, err := parse(t, `{"models":[{"name":"a","path":"/a.gguf","context":4096,
+		"speculation":{"type":"mtp"}}]}`)
+	if err == nil || !strings.Contains(err.Error(), "load_mtp") {
+		t.Fatalf("want load_mtp error, got %v", err)
+	}
+}
+
+func TestMTPSpeculationWithLoadMTPAccepted(t *testing.T) {
+	m, err := parse(t, `{"models":[{"name":"a","path":"/a.gguf","context":4096,
+		"load_mtp":true,"speculation":{"type":"mtp","max_draft":4}}]}`)
+	if err != nil {
+		t.Fatalf("want accepted, got %v", err)
+	}
+	if got := m.Models[0].Speculation.Type; got != "mtp" {
+		t.Fatalf("speculation type = %q, want mtp", got)
+	}
+}
+
+func TestUnknownSpeculationTypeRejected(t *testing.T) {
+	_, err := parse(t, `{"models":[{"name":"a","path":"/a.gguf","context":4096,
+		"speculation":{"type":"oracle"}}]}`)
+	if err == nil || !strings.Contains(err.Error(), "oracle") {
+		t.Fatalf("want type error naming the value, got %v", err)
+	}
+}
