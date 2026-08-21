@@ -39,6 +39,8 @@ usage:
                          host the manifest's models over an OpenAI-compatible API
   llama-herd bench --manifest <file> [--model <name>] [--streams 1,2,4,8]
                          measure throughput and emit a reproducible report
+  llama-herd inspect [--all] <model.gguf>
+                         report what a model file declares, including MTP layers
   llama-herd version     print version and build information
   llama-herd doctor      verify linkage and list the devices it can see
 
@@ -62,6 +64,9 @@ func main() {
 
 	case "bench":
 		os.Exit(benchCmd(flag.Args()[1:]))
+
+	case "inspect":
+		os.Exit(inspect(flag.Args()[1:]))
 
 	case "version":
 		fmt.Printf("llama-herd %s\n", version)
