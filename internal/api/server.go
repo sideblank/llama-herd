@@ -144,6 +144,7 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		Prompt:    prompt,
 		MaxTokens: req.limit(),
 		Stop:      req.Stop,
+		Sampling:  req.sampling(),
 	})
 	if err != nil {
 		status := http.StatusBadRequest

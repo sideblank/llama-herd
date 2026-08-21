@@ -273,3 +273,52 @@ func TestMaxTokensBothSpellings(t *testing.T) {
 		}
 	}
 }
+
+// Sampling fields must reach the engine rather than being silently dropped, which was the
+// behaviour before per-request chains existed.
+func TestSamplingFieldsReachTheEngine(t *testing.T) {
+	ts, done := newTestServer(t, "hi")
+	defer done()
+
+	resp := post(t, ts, `{"model":"test-model","messages":[{"role":"user","content":"hi"}],
+		"temperature":0.2,"top_p":0.5,"seed":7}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+}
+
+func TestSamplingRequestMapping(t *testing.T) {
+	var req ChatRequest
+	body := `{"model":"m","messages":[],"temperature":0,"top_k":10,"presence_penalty":0.5}`
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		t.Fatal(err)
+	}
+	p := req.sampling()
+	if p == nil {
+		t.Fatal("sampling should not be nil when fields are present")
+	}
+	// An explicit zero temperature means greedy and must survive as a set value.
+	if p.Temperature == nil || *p.Temperature != 0 {
+		t.Fatalf("temperature = %v, want an explicit 0", p.Temperature)
+	}
+	if p.TopK == nil || *p.TopK != 10 {
+		t.Fatalf("top_k = %v", p.TopK)
+	}
+	if p.PresencePenalty == nil || *p.PresencePenalty != 0.5 {
+		t.Fatalf("presence_penalty = %v", p.PresencePenalty)
+	}
+	if p.TopP != nil {
+		t.Fatal("omitted top_p should stay nil so the model default survives")
+	}
+}
+
+func TestNoSamplingFieldsMeansNoOverride(t *testing.T) {
+	var req ChatRequest
+	if err := json.Unmarshal([]byte(`{"model":"m","messages":[]}`), &req); err != nil {
+		t.Fatal(err)
+	}
+	if p := req.sampling(); p != nil {
+		t.Fatalf("expected nil override, got %+v", p)
+	}
+}

@@ -23,6 +23,30 @@ type ChatMessage struct {
 	Content string `json:"content"`
 }
 
+// SamplingParams is a backend-neutral description of how to draw the next token.
+//
+// Pointer fields distinguish "not specified" from a deliberate zero, because zero is
+// meaningful for most of them: a temperature of 0 means greedy, not "use the default".
+type SamplingParams struct {
+	Temperature     *float32
+	TopK            *int32
+	TopP            *float32
+	MinP            *float32
+	RepeatLastN     *int32
+	RepeatPenalty   *float32
+	FreqPenalty     *float32
+	PresencePenalty *float32
+	Seed            *uint32
+}
+
+// IsZero reports whether nothing was specified, in which case the model's configured
+// defaults apply and no per-request chain need be built.
+func (p *SamplingParams) IsZero() bool {
+	return p == nil || (p.Temperature == nil && p.TopK == nil && p.TopP == nil &&
+		p.MinP == nil && p.RepeatLastN == nil && p.RepeatPenalty == nil &&
+		p.FreqPenalty == nil && p.PresencePenalty == nil && p.Seed == nil)
+}
+
 // Renderer turns messages into the prompt string a specific model expects.
 //
 // Unlike Backend, this is called from request goroutines and must be safe for concurrent
@@ -79,6 +103,13 @@ type Backend interface {
 	// SampleAt draws the next token from the logits at batch index i, for sequence seq.
 	// The sampler state is per-sequence, so seq selects which chain advances.
 	SampleAt(seq SeqID, i int32) (Token, error)
+
+	// SetSampling configures the sampler for one sequence before its first sample.
+	// Passing nil restores the model's configured defaults.
+	//
+	// Sampler state is per-sequence, so this replaces that sequence's chain and must
+	// not disturb any other stream's.
+	SetSampling(seq SeqID, p *SamplingParams) error
 
 	// FreeSeq drops a sequence's KV cells, returning its capacity to the pool.
 	FreeSeq(seq SeqID)

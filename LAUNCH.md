@@ -88,8 +88,8 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for the reasoning behind each.
 
 - [x] Go CI — `build.yml` builds and vets on Linux, macOS and Windows.
 - [x] `-race` unit tests run in CI on all three platforms.
-- [ ] Per-request sampling: temperature and friends are accepted and ignored today, since
-      sampler chains are built per model at load rather than per request.
+- [x] Per-request sampling: temperature and friends are honoured per request, layered over
+      the model's configured defaults.
 - [x] **`LLAMA_CPP_REF` pinned** to a llama.cpp release tag in both workflows. Bump deliberately
       and note the new ref in the release notes.
 - [ ] **Confirm build provenance attestation works on this repo.** `release.yml` attests the

@@ -17,6 +17,9 @@ type Request struct {
 	MaxTokens int
 	// Stop ends generation when the accumulated output ends with any of these.
 	Stop []string
+	// Sampling overrides the model's configured sampling for this request only.
+	// Nil keeps the model's defaults.
+	Sampling *SamplingParams
 }
 
 // Event is one item in a stream's output.
@@ -59,6 +62,10 @@ type slot struct {
 	generated int
 	maxTokens int
 	stop      []string
+	sampling  *SamplingParams
+	// sampledOnce guards SetSampling so the chain is installed exactly once, before
+	// this slot's first sample, rather than on every tick.
+	sampledOnce bool
 
 	out    chan Event
 	ctx    context.Context
@@ -133,6 +140,7 @@ func (e *Engine) Submit(ctx context.Context, req Request) (*Stream, error) {
 		pending:   toks,
 		maxTokens: req.MaxTokens,
 		stop:      req.Stop,
+		sampling:  req.Sampling,
 		out:       make(chan Event, 32),
 		ctx:       cctx,
 		cancel:    cancel,
@@ -240,6 +248,7 @@ func (e *Engine) admit(active map[SeqID]*slot) {
 		e.free = e.free[1:]
 
 		s.seq = seq
+		s.sampledOnce = false
 		active[seq] = s
 	}
 }
@@ -324,6 +333,16 @@ func (e *Engine) harvest(active map[SeqID]*slot) error {
 		if s.ctx.Err() != nil {
 			e.finish(active, seq, ReasonCancel, nil)
 			continue
+		}
+
+		if !s.sampledOnce {
+			// Install per-request sampling on the decode-loop goroutine, which is the
+			// only one permitted to touch the backend.
+			if err := e.be.SetSampling(s.seq, s.sampling); err != nil {
+				e.finish(active, seq, "", fmt.Errorf("sampling: %w", err))
+				continue
+			}
+			s.sampledOnce = true
 		}
 
 		tok, err := e.be.SampleAt(s.seq, s.batchIdx)

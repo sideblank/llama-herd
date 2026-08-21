@@ -242,3 +242,80 @@ func TestEmptyPromptRejected(t *testing.T) {
 		t.Fatal("expected empty prompt to be rejected")
 	}
 }
+
+func TestPerRequestSamplingIsInstalledOncePerSlot(t *testing.T) {
+	f := newFake(1, 16)
+	f.script[0] = []Token{'a', 'b', 'c'}
+	e := New(f, Config{})
+	defer run(t, e)()
+
+	temp := float32(0.1)
+	s, err := e.Submit(context.Background(), Request{
+		Prompt:   "x",
+		Sampling: &SamplingParams{Temperature: &temp},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, s)
+
+	if got := f.samplingCalls[0]; got != 1 {
+		t.Fatalf("SetSampling called %d times, want exactly 1 — it should be installed once per slot", got)
+	}
+	got := f.sampling[0]
+	if got == nil || got.Temperature == nil || *got.Temperature != 0.1 {
+		t.Fatalf("sampling not passed through: %+v", got)
+	}
+}
+
+func TestRequestWithoutSamplingPassesNil(t *testing.T) {
+	f := newFake(1, 16)
+	f.script[0] = []Token{'a'}
+	e := New(f, Config{})
+	defer run(t, e)()
+
+	s, err := e.Submit(context.Background(), Request{Prompt: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, s)
+
+	if p := f.sampling[0]; !p.IsZero() {
+		t.Fatalf("expected no sampling override, got %+v", p)
+	}
+}
+
+// Each slot must get its own sampling: two concurrent requests with different settings
+// must not overwrite one another.
+func TestConcurrentRequestsGetIndependentSampling(t *testing.T) {
+	f := newFake(2, 16)
+	for i := SeqID(0); i < 2; i++ {
+		f.script[i] = []Token{'a', 'b', 'c', 'd'}
+	}
+	e := New(f, Config{})
+	defer run(t, e)()
+
+	hot, cold := float32(1.5), float32(0.0)
+	s1, err := e.Submit(context.Background(), Request{
+		Prompt: "x", MaxTokens: 4, Sampling: &SamplingParams{Temperature: &hot}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2, err := e.Submit(context.Background(), Request{
+		Prompt: "y", MaxTokens: 4, Sampling: &SamplingParams{Temperature: &cold}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, s1)
+	collect(t, s2)
+
+	temps := map[float32]bool{}
+	for _, p := range f.sampling {
+		if p != nil && p.Temperature != nil {
+			temps[*p.Temperature] = true
+		}
+	}
+	if !temps[1.5] || !temps[0.0] {
+		t.Fatalf("both temperatures should have been installed, saw %v", temps)
+	}
+}

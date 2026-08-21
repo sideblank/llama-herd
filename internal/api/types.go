@@ -21,6 +21,36 @@ type ChatRequest struct {
 
 	// Stop accepts either a string or an array, which is why it is decoded loosely.
 	Stop stopValue `json:"stop,omitempty"`
+
+	// Sampling controls. Pointers so an explicit zero is distinguishable from absence:
+	// "temperature": 0 asks for greedy decoding, which is not the same as omitting it.
+	Temperature      *float32 `json:"temperature,omitempty"`
+	TopP             *float32 `json:"top_p,omitempty"`
+	TopK             *int32   `json:"top_k,omitempty"`
+	MinP             *float32 `json:"min_p,omitempty"`
+	FrequencyPenalty *float32 `json:"frequency_penalty,omitempty"`
+	PresencePenalty  *float32 `json:"presence_penalty,omitempty"`
+	RepeatPenalty    *float32 `json:"repetition_penalty,omitempty"`
+	Seed             *uint32  `json:"seed,omitempty"`
+}
+
+// sampling maps the request onto the engine's neutral representation. Fields the caller
+// omitted stay nil, so the model's configured defaults survive.
+func (r ChatRequest) sampling() *engine.SamplingParams {
+	p := &engine.SamplingParams{
+		Temperature:     r.Temperature,
+		TopP:            r.TopP,
+		TopK:            r.TopK,
+		MinP:            r.MinP,
+		FreqPenalty:     r.FrequencyPenalty,
+		PresencePenalty: r.PresencePenalty,
+		RepeatPenalty:   r.RepeatPenalty,
+		Seed:            r.Seed,
+	}
+	if p.IsZero() {
+		return nil
+	}
+	return p
 }
 
 // limit resolves the two spellings of the output cap.

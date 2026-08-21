@@ -28,6 +28,13 @@ type Runner struct {
 	nVocab int32
 	eos    Token
 
+	// defaultSampling is the model's configured sampling, restored whenever a request
+	// asks for nothing specific.
+	defaultSampling SamplingParams
+	// custom marks sequences currently carrying a per-request chain, so a slot is only
+	// rebuilt when it actually differs from the default.
+	custom []bool
+
 	// chatTmpl is captured at load. Rendering then touches no live context state, which
 	// is what makes RenderChat safe to call from request goroutines while the decode
 	// loop is running.
@@ -71,12 +78,14 @@ func OpenRunner(cfg RunnerConfig) (*Runner, error) {
 	}
 
 	r := &Runner{
-		model:    m,
-		ctx:      ctx,
-		vocab:    vocab,
-		nVocab:   nVocab,
-		eos:      vocab.EOS(),
-		samplers: make([]*Sampler, nSeq),
+		model:           m,
+		ctx:             ctx,
+		vocab:           vocab,
+		nVocab:          nVocab,
+		eos:             vocab.EOS(),
+		samplers:        make([]*Sampler, nSeq),
+		custom:          make([]bool, nSeq),
+		defaultSampling: cfg.Sampling,
 	}
 
 	for i := range r.samplers {
@@ -184,6 +193,71 @@ func (r *Runner) SampleAt(seq engine.SeqID, i int32) (engine.Token, error) {
 		return 0, fmt.Errorf("llama: sequence %d out of range (have %d)", seq, len(r.samplers))
 	}
 	return engine.Token(r.samplers[seq].Sample(r.ctx, i)), nil
+}
+
+// SetSampling installs a per-request sampler chain for one sequence.
+//
+// Chains are rebuilt rather than mutated because llama.cpp's chain is a fixed pipeline once
+// constructed. The cost is a handful of small allocations per request, which is negligible
+// beside a forward pass — and the alternative, sharing one chain, would let concurrent
+// streams read each other's penalty windows.
+func (r *Runner) SetSampling(seq engine.SeqID, p *engine.SamplingParams) error {
+	i := int(seq)
+	if i < 0 || i >= len(r.samplers) {
+		return fmt.Errorf("llama: sequence %d out of range (have %d)", seq, len(r.samplers))
+	}
+
+	if p.IsZero() {
+		if !r.custom[i] {
+			return nil // already on the default chain
+		}
+		s, err := NewSampler(r.defaultSampling, r.nVocab)
+		if err != nil {
+			return err
+		}
+		r.samplers[i].Free()
+		r.samplers[i] = s
+		r.custom[i] = false
+		return nil
+	}
+
+	merged := r.defaultSampling
+	if p.Temperature != nil {
+		merged.Temperature = *p.Temperature
+	}
+	if p.TopK != nil {
+		merged.TopK = *p.TopK
+	}
+	if p.TopP != nil {
+		merged.TopP = *p.TopP
+	}
+	if p.MinP != nil {
+		merged.MinP = *p.MinP
+	}
+	if p.RepeatLastN != nil {
+		merged.RepeatLastN = *p.RepeatLastN
+	}
+	if p.RepeatPenalty != nil {
+		merged.RepeatPenalty = *p.RepeatPenalty
+	}
+	if p.FreqPenalty != nil {
+		merged.FreqPenalty = *p.FreqPenalty
+	}
+	if p.PresencePenalty != nil {
+		merged.PresencePenalty = *p.PresencePenalty
+	}
+	if p.Seed != nil {
+		merged.Seed = *p.Seed
+	}
+
+	s, err := NewSampler(merged, r.nVocab)
+	if err != nil {
+		return err
+	}
+	r.samplers[i].Free()
+	r.samplers[i] = s
+	r.custom[i] = true
+	return nil
 }
 
 // FreeSeq drops the sequence's KV cells and clears its sampler.

@@ -89,6 +89,10 @@ func (s *Scripted) BatchAdd(_ engine.Token, _ engine.Pos, _ engine.SeqID, _ bool
 
 func (s *Scripted) Decode() error { return nil }
 
+// SetSampling is accepted and ignored: the script is deterministic by design, so sampling
+// settings cannot change what it emits.
+func (s *Scripted) SetSampling(_ engine.SeqID, _ *engine.SamplingParams) error { return nil }
+
 func (s *Scripted) SampleAt(seq engine.SeqID, _ int32) (engine.Token, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

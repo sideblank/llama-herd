@@ -36,6 +36,10 @@ type fakeBackend struct {
 	maxSeen int32
 	// freed counts FreeSeq calls per sequence.
 	freed map[SeqID]int
+	// sampling records the last params installed per sequence.
+	sampling map[SeqID]*SamplingParams
+	// samplingCalls counts SetSampling calls per sequence.
+	samplingCalls map[SeqID]int
 }
 
 type staged struct {
@@ -47,13 +51,15 @@ type staged struct {
 
 func newFake(nSeqMax uint32, batchCap int32) *fakeBackend {
 	return &fakeBackend{
-		nCtx:     4096,
-		nCtxSeq:  1024,
-		nSeqMax:  nSeqMax,
-		batchCap: batchCap,
-		script:   map[SeqID][]Token{},
-		emitted:  map[SeqID]int{},
-		freed:    map[SeqID]int{},
+		nCtx:          4096,
+		nCtxSeq:       1024,
+		nSeqMax:       nSeqMax,
+		batchCap:      batchCap,
+		script:        map[SeqID][]Token{},
+		emitted:       map[SeqID]int{},
+		freed:         map[SeqID]int{},
+		sampling:      map[SeqID]*SamplingParams{},
+		samplingCalls: map[SeqID]int{},
 		// Deliberately outside the range of any scripted character token: an EOS of 99
 		// would collide with ASCII 'c' and end generation whenever that letter appeared.
 		eos: 1 << 20,
@@ -119,6 +125,14 @@ func (f *fakeBackend) SampleAt(seq SeqID, _ int32) (Token, error) {
 		return s[i], nil
 	}
 	return f.eos, nil
+}
+
+func (f *fakeBackend) SetSampling(seq SeqID, p *SamplingParams) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sampling[seq] = p
+	f.samplingCalls[seq]++
+	return nil
 }
 
 func (f *fakeBackend) FreeSeq(seq SeqID) {

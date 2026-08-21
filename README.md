@@ -126,6 +126,10 @@ curl localhost:8080/v1/chat/completions -H 'Content-Type: application/json' -d '
 }'
 ```
 
+Per-request sampling is honoured — `temperature`, `top_p`, `top_k`, `min_p`, the penalties and
+`seed` layer over the model's manifest defaults, and an explicit `"temperature": 0` means greedy
+rather than "unset".
+
 `GET /v1/models` lists what is loaded. `GET /health` reports per-model liveness and returns
 503 if a model's decode loop has died — so a load balancer stops sending traffic to a server
 that is still listening but can no longer answer.
