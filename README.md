@@ -85,8 +85,20 @@ See [PROVENANCE.md](PROVENANCE.md) for what does and does not carry over.
 
 ## Building
 
-Requires a CUDA build of llama.cpp and a Go toolchain. Build instructions land with the first
-code drop.
+Requires a Go toolchain and llama.cpp. Header and library locations are not hard-coded — supply
+them through the standard cgo environment variables:
+
+```bash
+export CGO_CFLAGS="-I/path/to/llama.cpp/include -I/path/to/llama.cpp/ggml/include"
+export CGO_LDFLAGS="-L/path/to/llama.cpp/build/bin"
+
+go build ./...
+go vet ./...
+```
+
+The binding compiles and vets against llama.cpp's headers alone, with no GPU and no built
+library present, which keeps signature and struct-layout errors out of the loop early. Linking
+and running need a CUDA build of llama.cpp and a card.
 
 ## License
 
