@@ -107,6 +107,50 @@ path gives back nothing while still occupying VRAM — the cost is paid twice. P
 overrides make this nearly free in space terms, and no third-party quantization does it,
 because nobody else is building an engine around the head.
 
+## Measuring speculation
+
+Speculation is the one optimisation here whose failure is invisible in throughput alone. A
+drafter that proposes nothing and a drafter that proposes badly both look like "no speedup",
+and so does a model whose prediction head was stripped in quantization — but the fixes are
+entirely different. Two figures separate them:
+
+| Figure | Meaning | What it does *not* tell you |
+|---|---|---|
+| **Drafted** | tokens proposed during the run | whether any were useful |
+| **Acceptance** | fraction the target kept | nothing, if drafted is 0 |
+
+Read them in that order. **Zero drafted** means no drafter is running at all — for `mtp`, the
+overwhelmingly likely cause is a quantization that dropped the head, which `llama-herd inspect`
+will confirm. **Drafted with near-zero acceptance** is the expensive case: batch space is being
+spent and every token thrown away, which is strictly worse than not drafting. **High acceptance
+with no throughput gain** means decode was not the bottleneck in that configuration.
+
+Acceptance is reported per run rather than as a lifetime total, because a server that has
+served other traffic would otherwise report that traffic's rate rather than this workload's.
+
+**It is the only speculation figure that compares across runs.** It does not move with prompt
+length, stream count or host contention, which is what makes it usable on a shared or
+contended box where throughput is not. Tokens-per-pass is also reported, but its baseline is
+the *stream count*, not one — four streams yielding 3.9 tokens per pass is ordinary batching,
+and reading 1.0 as the baseline reports speculation on every multi-stream run.
+
+### Choose the workload deliberately
+
+Acceptance is a property of the *traffic*, not only of the model, so a single workload measures
+a single case. `--workload` shapes the prompt like real traffic:
+
+```bash
+llama-herd bench --url http://host:8080 --model chat --workload freeform --streams 4
+```
+
+`code-edit`, `schema-fill` and `transcript` produce output that repeats the input, which is
+where lookup drafting earns its keep and where any drafter looks best. `freeform` and
+`summarize` produce output that repeats nothing, where lookup finds no match and proposes
+nothing at all — so it is the honest test of a trained head, and the one that says whether MTP
+is doing work lookup could have done for free.
+
+Publishing only the repetitive workloads reports the flattering half of the picture.
+
 ## Checking a configuration before deploying it
 
 `llama-herd fit` answers whether a streams-by-context target fits a card, from the model's own
