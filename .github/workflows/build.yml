@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -22,9 +23,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: linux-amd64,   os: ubuntu-latest}
-          - {name: macos-arm64,   os: macos-14}
-          - {name: windows-amd64, os: windows-latest}
+          # Linux runs on every change. macOS and Windows bill at 10x and 2x minutes
+          # respectively, so on a private repo they are gated to pull requests and manual
+          # runs rather than every push — a full matrix on every commit exhausts a month
+          # of included minutes in a couple of days.
+          - {name: linux-amd64,   os: ubuntu-latest,  always: true}
+          - {name: macos-arm64,   os: macos-14,       always: false}
+          - {name: windows-amd64, os: windows-latest, always: false}
+    if: >-
+      matrix.always ||
+      github.event_name == 'pull_request' ||
+      github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
 
