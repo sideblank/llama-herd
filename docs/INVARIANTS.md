@@ -132,6 +132,15 @@ round trip hides a lot at small model sizes.
 and ignored on update; image caching likewise. Getting them wrong means recreating, not
 patching.
 
+**Deploy immutable tags, never floating ones.** A provider that caches images at the edge can
+serve a stale copy of a mutable tag: pushing a new `:dev` and restarting brought up the
+*previous* build, with its endpoints still missing and nothing reporting a mismatch. The
+symptom was a health check passing while a new endpoint returned 404. Pin to a commit or a
+digest so a deploy means exactly one image.
+
+**Verify the deployed build, not the pushed one.** `/v1/info` reports the commit actually
+running. Checking it is the difference between deploying and believing you deployed.
+
 **Judge whether something is billing by instance counts, not status strings.** A group can sit
 in a non-stopped state while pre-caching an image, with nothing allocated and nothing charged.
 
