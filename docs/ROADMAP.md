@@ -87,8 +87,13 @@ cache size is:
 bytes = 2 (K and V) × n_layers × n_kv_heads × head_dim × n_tokens × bytes_per_element
 ```
 
-For an 8B-class model with grouped-query attention (32 layers, 8 KV heads, 128 head dim) that is
-**64 KiB per token** at 1 byte per element. Which gives, for one sequence:
+Crucially, `n_layers` here means **layers that actually hold a cache**. Hybrid architectures
+cache only every Nth layer and use linear attention elsewhere, whose state is constant-size
+and does not grow with context — so their KV cost is a fraction of a dense model's, and
+assuming otherwise overstates it by that factor.
+
+For a dense 8B-class model with grouped-query attention (32 layers, 8 KV heads, 128 head dim)
+that is **64 KiB per token** at 1 byte per element. Which gives, for one sequence:
 
 | Context | KV @ 4-bit | KV @ 8-bit | KV @ fp16 |
 |---------|-----------|-----------|-----------|

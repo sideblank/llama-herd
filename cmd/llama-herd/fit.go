@@ -82,8 +82,15 @@ func fitCmd(args []string) int {
 	}
 
 	fmt.Printf("%s\n", path)
-	fmt.Printf("  %s  layers=%d  kv_heads=%d  head_dim=%d/%d  ctx_train=%d\n\n",
+	fmt.Printf("  %s  layers=%d  kv_heads=%d  head_dim=%d/%d  ctx_train=%d\n",
 		shape.Arch, shape.Layers, shape.HeadsKV, shape.KeyLength, shape.ValueLength, shape.CtxTrain)
+	if shape.Hybrid() {
+		fmt.Printf("  hybrid attention: every %d%s layer caches, so %d of %d layers hold KV\n",
+			shape.FullAttentionInterval, ordinal(shape.FullAttentionInterval),
+			shape.KVLayers(), shape.Layers)
+		fmt.Printf("  the rest use linear attention, whose state is constant-size and does not grow with context\n")
+	}
+	fmt.Println()
 	fmt.Printf("  card %s: %s VRAM\n", *card, llama.GiB(int64(vram)))
 	fmt.Printf("  weights: %s   reserved for compute: %s\n\n",
 		llama.GiB(st.Size()), llama.GiB(llama.DefaultOverhead))
@@ -115,6 +122,21 @@ func fitCmd(args []string) int {
 		}
 	}
 
+	fmt.Printf("\n  Weight budget left by that target (quantization moves this, not the KV):\n")
+	params := m.ParamCount()
+	for _, p := range precs {
+		b := llama.BudgetFor(in, p, *streams, perStream, params)
+		if b.Bytes <= 0 {
+			fmt.Printf("    KV %-9s %-14s %s\n", p.Name, llama.GiB(b.Bytes), b.Verdict())
+			continue
+		}
+		bits := "?"
+		if b.BitsPerWeight > 0 {
+			bits = fmt.Sprintf("%.2f bits/wt", b.BitsPerWeight)
+		}
+		fmt.Printf("    KV %-9s %-14s %-15s %s\n", p.Name, llama.GiB(b.Bytes), bits, b.Verdict())
+	}
+
 	if !anyFits {
 		best := llama.Fit(in, llama.KVq4)
 		fmt.Printf("\n  Not reachable on one %s. At q4_0 this card holds %s of context in total,\n",
@@ -131,6 +153,19 @@ func fitCmd(args []string) int {
 		fmt.Printf("    - a smaller model, or a smaller quantization\n")
 	}
 	return 0
+}
+
+func ordinal(n int) string {
+	switch n {
+	case 1:
+		return "st"
+	case 2:
+		return "nd"
+	case 3:
+		return "rd"
+	default:
+		return "th"
+	}
 }
 
 func parseTokens(s string) (int64, error) {

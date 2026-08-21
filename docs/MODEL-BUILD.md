@@ -62,6 +62,28 @@ Three conversion modes matter:
 Our default is the first: one file, MTP included. The split form is worth producing only when
 a target/draft pair is measurably faster than the combined head for that model.
 
+## Sizing depends on the attention architecture, not the parameter count
+
+The capacity question turns on KV cost per token, and that is set by how many layers actually
+hold a cache — which is not always all of them.
+
+**Hybrid architectures cache only every Nth layer.** The rest use linear attention, whose
+state is constant-size and does not grow with context at all. A 48-layer model with a
+full-attention interval of 4 holds KV on 12 layers, so its cache costs a **quarter** of what
+a dense model of the same depth would.
+
+The difference is large enough to invert a conclusion. A dense 64-layer, 8-KV-head model
+needs 32 GiB for 512k tokens of KV — more than a 24 GB card holds, at any quantization. A
+hybrid 48-layer model with 4 KV heads needs **6 GiB at q8** for the same 512k, which leaves
+room for the weights on the same card.
+
+So the selection criterion is the attention geometry, not the parameter count. Two models of
+similar size can differ by 4× in what they can hold. `llama-herd fit` reads the geometry from
+the file, including the full-attention interval, and reports the real number.
+
+**Quantized KV requires flash attention.** Setting a quantized KV type without it does not
+work, and that pairing has to be carried in the manifest together.
+
 ## The pipeline
 
 Each stage has a gate. A build that fails a gate is not published.

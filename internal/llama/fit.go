@@ -33,7 +33,33 @@ type Shape struct {
 	ValueLength int
 	CtxTrain    int
 	EmbdLength  int
+
+	// FullAttentionInterval is set by hybrid architectures, where only every Nth layer
+	// keeps a KV cache and the rest use linear attention with a constant-size recurrent
+	// state that does not grow with context.
+	//
+	// Ignoring it overstates KV cost by exactly this factor — enough to declare a working
+	// configuration impossible. 0 or 1 means every layer caches.
+	FullAttentionInterval int
 }
+
+// KVLayers is how many layers actually hold a KV cache.
+func (s Shape) KVLayers() int {
+	if s.FullAttentionInterval > 1 {
+		n := s.Layers / s.FullAttentionInterval
+		if s.Layers%s.FullAttentionInterval != 0 {
+			n++
+		}
+		if n < 1 {
+			n = 1
+		}
+		return n
+	}
+	return s.Layers
+}
+
+// Hybrid reports whether only some layers cache.
+func (s Shape) Hybrid() bool { return s.FullAttentionInterval > 1 }
 
 func (m *Model) metaInt(key string) int {
 	v, ok := m.Meta(key)
@@ -58,6 +84,8 @@ func (m *Model) Shape() Shape {
 		ValueLength: m.metaInt(a + ".attention.value_length"),
 		CtxTrain:    m.metaInt(a + ".context_length"),
 		EmbdLength:  m.metaInt(a + ".embedding_length"),
+
+		FullAttentionInterval: m.metaInt(a + ".full_attention_interval"),
 	}
 	// Some files omit the explicit key/value lengths, in which case they are the
 	// embedding size divided by the head count.
@@ -83,7 +111,7 @@ func (s Shape) Valid() bool {
 // the weights, divided by this. It is per token across every layer and both K and V, so it
 // is much larger than intuition suggests.
 func (s Shape) KVBytesPerToken(p KVPrecision) float64 {
-	return float64(s.Layers) * float64(s.HeadsKV) *
+	return float64(s.KVLayers()) * float64(s.HeadsKV) *
 		(float64(s.KeyLength) + float64(s.ValueLength)) * p.Bytes
 }
 
@@ -150,6 +178,74 @@ func PlanFor(in FitInput, p KVPrecision, streams int, perStream int64) Plan {
 		pl.ShortBy = need - have
 	}
 	return pl
+}
+
+// WeightBudget is what a target leaves for the weights, and what that implies about how far
+// they must be compressed.
+type WeightBudget struct {
+	// Bytes available for weights after KV and overhead.
+	Bytes int64
+	// BitsPerWeight the model must reach to fit, if the parameter count is known. This is
+	// the number that decides whether a target is reachable: below roughly 3 bits quality
+	// degrades sharply on most models, and below 2 it is rarely usable.
+	BitsPerWeight float64
+	// Params is the parameter count used, or 0 if it could not be determined.
+	Params int64
+}
+
+// BudgetFor reports what remains for weights once a streams-by-context target is met.
+//
+// Quantization compresses weights, not the KV cache, so this is the only budget it can move.
+// A target whose KV cost already exceeds the card is unreachable at any quantization.
+func BudgetFor(in FitInput, p KVPrecision, streams int, perStream int64, params int64) WeightBudget {
+	kvNeed := int64(float64(int64(streams)*perStream) * in.Shape.KVBytesPerToken(p))
+	overhead := in.OverheadBytes
+	if overhead == 0 {
+		overhead = DefaultOverhead
+	}
+	b := WeightBudget{Bytes: int64(in.VRAMBytes) - kvNeed - int64(overhead), Params: params}
+	if params > 0 && b.Bytes > 0 {
+		b.BitsPerWeight = float64(b.Bytes) * 8 / float64(params)
+	}
+	return b
+}
+
+// Verdict describes whether a required bits-per-weight is realistic.
+//
+// These thresholds are guidance for planning, not measurements. Whether a specific model
+// survives a given level has to be measured on that model — some tolerate 3 bits well and
+// others fall apart, and the difference does not follow from parameter count.
+func (b WeightBudget) Verdict() string {
+	switch {
+	case b.Bytes <= 0:
+		return "unreachable — the KV cache alone exceeds the card"
+	case b.Params == 0:
+		return "parameter count unknown; compare the byte budget against candidate quantizations"
+	case b.BitsPerWeight >= 8:
+		return "comfortable — 8-bit or better"
+	case b.BitsPerWeight >= 5:
+		return "comfortable — around Q5/Q6"
+	case b.BitsPerWeight >= 4:
+		return "workable — around Q4, the usual target"
+	case b.BitsPerWeight >= 3:
+		return "tight — Q3 territory, quality must be measured rather than assumed"
+	case b.BitsPerWeight >= 2:
+		return "severe — Q2 territory, often unusable; verify before committing GPU time"
+	default:
+		return "not reachable at any usable quantization"
+	}
+}
+
+// ParamCount reads the declared parameter count, or 0 when the file does not state one.
+func (m *Model) ParamCount() int64 {
+	for _, k := range []string{"general.parameter_count", "general.size_label"} {
+		if v, ok := m.Meta(k); ok {
+			if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+				return n
+			}
+		}
+	}
+	return 0
 }
 
 // GiB renders a byte count for humans.
