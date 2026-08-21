@@ -25,9 +25,19 @@ RUN git clone --depth 1 --branch ${LLAMA_CPP_REF} \
 # 86 = Ampere (3090), 89 = Ada (4090), 120 = Blackwell (5090).
 # Only the library is built: the tools, examples, server and unified app are not used
 # here, and the app target in particular pulls in the common library we do not need.
+# GGML_BACKEND_DL makes each backend a plugin loaded at run time instead of a hard
+# NEEDED entry. Without it libggml.so requires libggml-cuda.so, which requires the host
+# driver's libcuda.so.1 — so the binary cannot even print its version on a machine
+# without a GPU, and a CPU-only deployment is impossible.
+#
+# GGML_NATIVE=OFF stops the CPU backend being compiled for the build machine's exact
+# instruction set. A container scheduled onto an arbitrary node would otherwise die with
+# an illegal instruction on any CPU older than the builder's.
 RUN cmake -S /src/llama.cpp -B /src/build \
       -DCMAKE_BUILD_TYPE=Release \
       -DBUILD_SHARED_LIBS=ON \
+      -DGGML_BACKEND_DL=ON \
+      -DGGML_NATIVE=OFF \
       -DGGML_CUDA=ON \
       -DCMAKE_CUDA_ARCHITECTURES="86;89;120" \
       -DLLAMA_BUILD_COMMON=OFF \
@@ -67,7 +77,11 @@ ARG COMMIT=none
 # The runtime libraries sit beside the binary in the final image, so the loader is told to
 # look there rather than in a system path.
 ENV CGO_CFLAGS="-I/opt/llama/include"
-ENV CGO_LDFLAGS="-L/opt/llama/lib -Wl,-rpath,\$ORIGIN/../lib"
+# --allow-shlib-undefined is required, not cosmetic. libggml-cuda.so references CUDA
+# driver symbols (cuMemMap, cuGetErrorString, ...) that live in libcuda.so, which is
+# supplied by the host driver at run time and is absent from any build image. Without
+# this the link fails on a machine that has no GPU — that is, on every build machine.
+ENV CGO_LDFLAGS="-L/opt/llama/lib -Wl,-rpath,\$ORIGIN/../lib -Wl,--allow-shlib-undefined"
 
 RUN go build -trimpath \
       -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.llamaCppRef=${LLAMA_CPP_REF}" \
@@ -76,12 +90,17 @@ RUN go build -trimpath \
 # --- runtime ---------------------------------------------------------------------------
 FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION}
 
+# libgomp1 is required, not optional: ggml's CPU backend links OpenMP, and the CUDA
+# runtime base does not ship it. Without it the binary dies at startup with
+# "libgomp.so.1: cannot open shared object file" — a failure that only appears when the
+# image is actually run, never during the build.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl \
+      ca-certificates curl libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=llama /opt/llama/lib /opt/llama-herd/lib
 COPY --from=build /out/bin/llama-herd /opt/llama-herd/bin/llama-herd
+COPY docker-entrypoint.sh /opt/llama-herd/bin/docker-entrypoint.sh
 
 # ggml loads its CUDA backend as a plugin at runtime rather than linking it, so the
 # library directory must be discoverable or the GPU silently does not appear.
@@ -97,5 +116,5 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
   CMD curl -fsS http://localhost:8080/health || exit 1
 
-ENTRYPOINT ["llama-herd"]
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["serve", "--manifest", "/etc/llama-herd/manifest.json"]

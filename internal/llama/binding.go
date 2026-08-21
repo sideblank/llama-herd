@@ -16,7 +16,10 @@
 package llama
 
 /*
-#cgo LDFLAGS: -lllama
+// libllama depends on ggml, and modern GNU ld does not resolve indirect shared-library
+// dependencies transitively — linking only -lllama fails with "DSO missing from command
+// line". The CUDA and CPU backends are not listed: ggml loads those as plugins at run time.
+#cgo LDFLAGS: -lllama -lggml -lggml-base
 #include <stdlib.h>
 #include <string.h>
 #include "llama.h"
