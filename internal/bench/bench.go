@@ -12,12 +12,37 @@ package bench
 import (
 	"context"
 	"fmt"
+	"os"
+	"runtime"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/sideblank/llama-herd/internal/engine"
 )
+
+// LoadAverage returns the one-minute load average and the core count.
+//
+// A benchmark on a loaded machine is worthless and looks fine, so this is recorded with every
+// run rather than left to the operator to remember.
+func LoadAverage() (float64, int) {
+	cpus := runtime.NumCPU()
+	b, err := os.ReadFile("/proc/loadavg")
+	if err != nil {
+		return 0, cpus
+	}
+	fields := strings.Fields(string(b))
+	if len(fields) == 0 {
+		return 0, cpus
+	}
+	v, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil {
+		return 0, cpus
+	}
+	return v, cpus
+}
 
 // Config describes one measurement.
 type Config struct {

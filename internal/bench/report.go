@@ -36,6 +36,21 @@ type Environment struct {
 	LoadMTP      bool   `json:"load_mtp"`
 
 	PromptTokens int `json:"prompt_tokens"`
+
+	// LoadAvg1 is the system load at the start of the run.
+	//
+	// Recorded because a benchmark taken on a busy machine produces numbers that look
+	// entirely plausible and are worthless. A compile running in the background is enough
+	// to make single-stream throughput read fortyfold low, and nothing in the result
+	// reveals it.
+	LoadAvg1 float64 `json:"load_avg_1m"`
+	// CPUs is the core count, so load can be read as a fraction.
+	CPUs int `json:"cpus"`
+}
+
+// Busy reports whether the machine was loaded enough to distort the result.
+func (e Environment) Busy() bool {
+	return e.CPUs > 0 && e.LoadAvg1 > float64(e.CPUs)*0.5
 }
 
 // Device is one accelerator present during the run.
@@ -79,7 +94,8 @@ func (r *Report) WriteMarkdown(w io.Writer) error {
 		}
 		b.WriteString("\n")
 	}
-	fmt.Fprintf(&b, "Platform: %s/%s, Go %s.\n\n", e.OS, e.Arch, e.GoVersion)
+	fmt.Fprintf(&b, "Platform: %s/%s, Go %s. Load average at start: %.2f across %d cores.\n\n",
+		e.OS, e.Arch, e.GoVersion, e.LoadAvg1, e.CPUs)
 
 	b.WriteString("## Model\n\n")
 	fmt.Fprintf(&b, "- **Name**: %s\n", e.ModelName)
@@ -95,6 +111,13 @@ func (r *Report) WriteMarkdown(w io.Writer) error {
 	}
 	fmt.Fprintf(&b, "- **MTP layers loaded**: %v\n", e.LoadMTP)
 	fmt.Fprintf(&b, "- **Prompt**: %d tokens\n\n", e.PromptTokens)
+
+	if e.Busy() {
+		fmt.Fprintf(&b, "> **These numbers are not trustworthy.** Load average was %.1f across %d "+
+			"cores when the run started, so the machine was busy with other work. A loaded "+
+			"machine produces plausible-looking figures that are badly wrong. Re-run on an "+
+			"idle host.\n\n", e.LoadAvg1, e.CPUs)
+	}
 
 	b.WriteString("## Results\n\n")
 	b.WriteString("| Streams | Decode tok/s | End-to-end tok/s | Per-stream tok/s | TTFT p50 | TTFT p95 |\n")

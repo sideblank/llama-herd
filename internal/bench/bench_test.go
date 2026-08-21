@@ -183,3 +183,35 @@ func TestPerStreamIsConsistentWithAggregate(t *testing.T) {
 		t.Fatal("per-stream must never exceed the aggregate")
 	}
 }
+
+func TestBusyMachineIsFlagged(t *testing.T) {
+	// A benchmark on a loaded machine looks fine and is wrong, so the report must say so
+	// rather than leaving the reader to guess.
+	busy := Environment{LoadAvg1: 42.0, CPUs: 16}
+	if !busy.Busy() {
+		t.Fatal("load of 42 across 16 cores should be flagged")
+	}
+	idle := Environment{LoadAvg1: 0.4, CPUs: 16}
+	if idle.Busy() {
+		t.Fatal("an idle machine should not be flagged")
+	}
+
+	rep := &Report{Environment: busy, Results: []*Result{{Streams: 1, DecodeTokPerSec: 0.4}}}
+	var sb strings.Builder
+	if err := rep.WriteMarkdown(&sb); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sb.String(), "not trustworthy") {
+		t.Fatal("a report from a busy machine must warn in the output itself")
+	}
+}
+
+func TestLoadAverageIsReadable(t *testing.T) {
+	load, cpus := LoadAverage()
+	if cpus < 1 {
+		t.Fatal("core count should be at least 1")
+	}
+	if load < 0 {
+		t.Fatalf("load = %v", load)
+	}
+}

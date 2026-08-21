@@ -143,6 +143,14 @@ func benchCmd(args []string) int {
 		LoadMTP:      target.LoadMTP,
 		PromptTokens: len(promptToks),
 	}
+	env.LoadAvg1, env.CPUs = bench.LoadAverage()
+	if env.Busy() {
+		fmt.Fprintf(os.Stderr,
+			"\nWARNING: load average is %.1f across %d cores. This machine is busy, and a\n"+
+				"benchmark taken now will produce plausible-looking numbers that are wrong.\n"+
+				"The report will say so, but re-running on an idle host is better.\n\n",
+			env.LoadAvg1, env.CPUs)
+	}
 	for _, d := range llama.Devices() {
 		env.Devices = append(env.Devices, bench.Device{
 			Name: d.Name, Type: d.Type.String(),
