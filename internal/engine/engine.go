@@ -104,6 +104,8 @@ type Engine struct {
 	wake chan struct{}
 
 	closed bool
+
+	c counters
 }
 
 // Config tunes admission.
@@ -185,6 +187,9 @@ func (e *Engine) Submit(ctx context.Context, req Request) (*Stream, error) {
 	}
 	e.queue = append(e.queue, s)
 	e.mu.Unlock()
+
+	e.c.requests.Add(1)
+	e.c.prompt.Add(uint64(len(toks)))
 
 	e.signal()
 	return &Stream{Events: s.out, cancel: cancel}, nil
@@ -285,6 +290,7 @@ func (e *Engine) admit(active map[SeqID]*slot) {
 		s.seq = seq
 		s.sampledOnce = false
 		active[seq] = s
+		e.c.active.Add(1)
 	}
 }
 
@@ -430,6 +436,7 @@ func (e *Engine) harvest(active map[SeqID]*slot) error {
 
 		s.next = tok
 		s.generated++
+		e.c.tokens.Add(1)
 		if text, ok := s.consume(piece); ok {
 			s.emit(Event{Text: text})
 		}
@@ -484,6 +491,13 @@ func (e *Engine) finish(active map[SeqID]*slot, seq SeqID, reason string, err er
 		return
 	}
 	delete(active, seq)
+	e.c.active.Add(-1)
+	if err != nil {
+		e.c.failed.Add(1)
+	}
+	if reason == ReasonContext {
+		e.c.evictions.Add(1)
+	}
 	e.be.FreeSeq(s.seq)
 
 	s.emit(Event{Done: true, Reason: reason, Err: err})

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sideblank/llama-herd/internal/engine"
+	"github.com/sideblank/llama-herd/internal/hostinfo"
 )
 
 // Clock is injectable so responses are deterministic under test.
@@ -51,6 +52,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.health)
 	mux.HandleFunc("GET /v1/info", s.info)
+	mux.HandleFunc("GET /metrics", s.metrics)
 	mux.HandleFunc("GET /v1/models", s.listModels)
 	mux.HandleFunc("POST /v1/chat/completions", s.chatCompletions)
 	return mux
@@ -112,36 +114,73 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(out)
 }
 
+// Info is the full picture of a running instance: what it is, what it runs on, and what it
+// is currently doing. Intended to be safe to expose to whoever operates the process,
+// including an end user running it on their own machine.
+type Info struct {
+	Build       BuildInfo     `json:"build"`
+	Accelerated bool          `json:"accelerated"`
+	Warning     string        `json:"warning,omitempty"`
+	Host        hostinfo.Host `json:"host"`
+	Devices     []DeviceInfo  `json:"devices"`
+	Models      []ModelStatus `json:"models"`
+}
+
+// ModelStatus is one model's configuration and live utilisation.
+type ModelStatus struct {
+	Name  string        `json:"name"`
+	OK    bool          `json:"ok"`
+	Error string        `json:"error,omitempty"`
+	Stats *engine.Stats `json:"stats,omitempty"`
+}
+
+// snapshot builds the current Info.
+func (s *Server) snapshot() Info {
+	var in Info
+	in.Build = s.build
+	in.Host = hostinfo.Read()
+
+	if s.devices != nil {
+		in.Devices = s.devices()
+	}
+	for _, d := range in.Devices {
+		if d.Type == "gpu" {
+			in.Accelerated = true
+		}
+	}
+	if !in.Accelerated {
+		in.Warning = "no dedicated-memory GPU found — this process is running on CPU. " +
+			"Requests will be answered correctly but far more slowly."
+	} else if in.Host.Oversubscribed() {
+		in.Warning = "the machine is loaded beyond its core count, so throughput will be " +
+			"well below what this hardware can do, for reasons unrelated to the model."
+	}
+
+	health := s.reg.Health()
+	for _, name := range s.reg.Names() {
+		ms := ModelStatus{Name: name, OK: health[name] == nil}
+		if err := health[name]; err != nil {
+			ms.Error = err.Error()
+		}
+		if eng, err := s.reg.Get(name); err == nil {
+			st := eng.Stats()
+			ms.Stats = &st
+		}
+		in.Models = append(in.Models, ms)
+	}
+	return in
+}
+
 // info reports the build and the hardware in use.
 //
 // The accelerated field is the one that matters: a server that found no accelerator still
 // answers requests correctly, just far more slowly, so this is the only cheap way to tell a
 // working deployment from a silently degraded one.
 func (s *Server) info(w http.ResponseWriter, _ *http.Request) {
-	var out struct {
-		Build       BuildInfo    `json:"build"`
-		Accelerated bool         `json:"accelerated"`
-		Devices     []DeviceInfo `json:"devices"`
-		Models      []string     `json:"models"`
-		Warning     string       `json:"warning,omitempty"`
-	}
-	out.Build = s.build
-	out.Models = s.reg.Names()
-	if s.devices != nil {
-		out.Devices = s.devices()
-	}
-	for _, d := range out.Devices {
-		if d.Type == "gpu" {
-			out.Accelerated = true
-		}
-	}
-	if !out.Accelerated {
-		out.Warning = "no dedicated-memory GPU found — this process is running on CPU. " +
-			"Requests will be answered correctly but far more slowly."
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(out)
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(s.snapshot())
 }
 
 func (s *Server) listModels(w http.ResponseWriter, _ *http.Request) {

@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -335,26 +336,27 @@ func TestInfoReportsHardwareAndWarnsOnCPUOnly(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	var got struct {
-		Build       BuildInfo    `json:"build"`
-		Accelerated bool         `json:"accelerated"`
-		Devices     []DeviceInfo `json:"devices"`
-		Models      []string     `json:"models"`
-		Warning     string       `json:"warning"`
-	}
+	var got Info
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	// The test server reports no devices, which must read as unaccelerated with a warning
-	// rather than as silence.
 	if got.Accelerated {
 		t.Error("no devices reported, so accelerated must be false")
 	}
 	if got.Warning == "" {
 		t.Error("a CPU-only process must say so; silence is the failure mode this prevents")
 	}
-	if len(got.Models) != 1 || got.Models[0] != "test-model" {
-		t.Errorf("models = %v", got.Models)
+	if len(got.Models) != 1 || got.Models[0].Name != "test-model" {
+		t.Errorf("models = %+v", got.Models)
+	}
+	if got.Host.CPUs < 1 {
+		t.Error("host stats should be populated")
+	}
+	if got.Models[0].Stats == nil {
+		t.Fatal("per-model stats should be present")
+	}
+	if got.Models[0].Stats.StreamsMax != 4 {
+		t.Errorf("streams_max = %d, want 4", got.Models[0].Stats.StreamsMax)
 	}
 }
 
@@ -378,12 +380,7 @@ func TestInfoReportsGPUWhenPresent(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	var got struct {
-		Build       BuildInfo    `json:"build"`
-		Accelerated bool         `json:"accelerated"`
-		Devices     []DeviceInfo `json:"devices"`
-		Warning     string       `json:"warning"`
-	}
+	var got Info
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
@@ -395,5 +392,55 @@ func TestInfoReportsGPUWhenPresent(t *testing.T) {
 	}
 	if got.Build.LlamaCppRef != "b10545" {
 		t.Errorf("build info missing: %+v", got.Build)
+	}
+}
+
+func TestMetricsExposition(t *testing.T) {
+	ts, done := newTestServer(t, "hello")
+	defer done()
+
+	// Generate some work so the counters are non-zero.
+	post(t, ts, `{"model":"test-model","messages":[{"role":"user","content":"hi"}]}`).Body.Close()
+
+	resp, err := http.Get(ts.URL + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Fatalf("content-type = %q", ct)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	body := string(b)
+
+	for _, want := range []string{
+		"llama_herd_build_info{",
+		"llama_herd_accelerated",
+		"llama_herd_host_cpus",
+		`llama_herd_streams_max{model="test-model"}`,
+		`llama_herd_queue_depth{model="test-model"}`,
+		"llama_herd_requests_total",
+		"llama_herd_tokens_generated_total",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("metrics missing %q", want)
+		}
+	}
+
+	// Every metric needs exactly one HELP and one TYPE line, even when repeated across
+	// label sets — a scrape rejects duplicates.
+	for _, name := range []string{"llama_herd_streams_max", "llama_herd_requests_total"} {
+		if n := strings.Count(body, "# TYPE "+name+" "); n != 1 {
+			t.Errorf("%s has %d TYPE lines, want exactly 1", name, n)
+		}
+		if n := strings.Count(body, "# HELP "+name+" "); n != 1 {
+			t.Errorf("%s has %d HELP lines, want exactly 1", name, n)
+		}
+	}
+
+	// Counters must have recorded the request we just made.
+	if !strings.Contains(body, `llama_herd_requests_total{model="test-model"} 1`) {
+		t.Errorf("request counter did not increment:\n%s", body)
 	}
 }

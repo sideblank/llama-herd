@@ -143,9 +143,24 @@ Per-request sampling is honoured — `temperature`, `top_p`, `top_k`, `min_p`, t
 `seed` layer over the model's manifest defaults, and an explicit `"temperature": 0` means greedy
 rather than "unset".
 
-`GET /v1/info` reports the build and the hardware actually in use, and says so explicitly when
-no accelerator was found. Worth checking after any deploy: a server that silently fell back to
-CPU answers every request correctly and passes its health check, so nothing else reveals it.
+### Observability
+
+`GET /v1/info` reports everything about a running instance: build, devices with live free
+VRAM, host CPU/load/memory, and per-model utilisation — streams in use against streams
+available, queue depth, and cumulative counters.
+
+It says so explicitly when no accelerator was found. Worth checking after any deploy: a server
+that silently fell back to CPU answers every request correctly and passes its health check, so
+nothing else reveals it.
+
+`GET /metrics` serves the same figures in Prometheus exposition format, so an instance can be
+scraped without a sidecar — including one running on someone's own machine. No client library
+is pulled in for it; the surface is a handful of counters and gauges and is not worth a
+dependency tree in a binary people run locally.
+
+The two numbers worth alerting on: **queue depth** persistently above zero means the model is
+saturated, and **evictions** rising means the context budget is over-committed for the load
+being offered. Both are visible long before latency makes them obvious.
 
 `GET /v1/models` lists what is loaded. `GET /health` reports per-model liveness and returns
 503 if a model's decode loop has died — so a load balancer stops sending traffic to a server
