@@ -13,12 +13,23 @@ once per clone. Without it the local hooks do not run.
 
 ## Commit rules
 
-- Commits carry the project identity only: `Benjamin Goldman <benjamin.goldman@gmail.com>`.
-- **One author per commit. No `Co-Authored-By:` trailers of any kind.**
-- No tool or assistant attribution: no session links, no "Generated with ..." lines, no
-  third-party addresses or URLs. The message describes the change, nothing else.
-- Agent-tooling files (`CLAUDE.md`, `.claude/`, `.mcp.json`, `.cursorrules`, ...) are gitignored
-  and must never be tracked.
+The policy is an **allow-list**: anything not explicitly permitted is rejected. Nothing in the
+checker names a vendor, so a new tool needs no new rule.
+
+| Aspect | Allowed |
+|--------|---------|
+| Author + committer | `Benjamin Goldman <benjamin.goldman@gmail.com>` — nothing else |
+| Trailers | `Signed-off-by`, `Refs`, `Fixes`, `Closes` — every other key is rejected |
+| Addresses in the message | `benjamin.goldman@gmail.com` only |
+| Link hosts in the message | `github.com`, `huggingface.co` only |
+
+`Co-Authored-By:` is simply not on the trailer list, so it is rejected — as is any assistant
+session trailer, generated-by line, or third-party address or link, whatever tool produced it.
+
+Tracked files must obey `.gitignore`. That file is the one place tool names appear; the checker
+just enforces that nothing it excludes is ever committed.
+
+To widen a list, edit the policy block at the top of `scripts/check-commits.sh`.
 
 ## Enforcement
 

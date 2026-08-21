@@ -1,14 +1,24 @@
-# Assistant / agent tooling — never checked in
+# Agent / assistant tooling — never checked in.
+# This is the single place tool names appear; the policy checker itself is
+# vendor-neutral and simply enforces that nothing ignored here is tracked.
 CLAUDE.md
 CLAUDE.local.md
 .claude/
 .claude.json
 .claude.local.json
-.mcp.json
-.aider*
+GEMINI.md
+.gemini/
+AGENTS.md
+.codex/
+.openai/
+.github/copilot-instructions.md
+.copilot/
 .cursor/
 .cursorrules
-.github/copilot-instructions.md
+.aider*
+.continue/
+.windsurfrules
+.mcp.json
 
 # Local env / secrets
 .env
