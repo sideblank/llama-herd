@@ -53,7 +53,13 @@ if [ ! -f "$MANIFEST" ]; then
     # gigabytes, so a connection dropped at 90% otherwise costs the whole download again,
     # and --retry alone restarts from zero. The partial is named after the target file, so
     # a resume can only ever continue the same model.
+    # --speed-limit/--speed-time abort a transfer that is technically alive but moving at
+    # nothing. Without them --retry never fires on a stalled connection: curl only retries
+    # on failure, and a socket delivering a trickle never fails. On a rented node that is
+    # the difference between failing over in a minute and billing by the hour for a
+    # download that will not finish.
     curl -fL -C - --retry 5 --retry-delay 5 --retry-all-errors \
+         --speed-limit 1048576 --speed-time 60 \
          -o "$tmp" "$LLAMA_HERD_MODEL_URL"
     mv "$tmp" "$model_file"
     echo "entrypoint: fetched $(du -h "$model_file" | cut -f1)"
