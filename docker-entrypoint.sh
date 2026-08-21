@@ -16,6 +16,9 @@
 #   LLAMA_HERD_KV_TYPE_V     value cache precision                (default: f16)
 #   LLAMA_HERD_FLASH_ATTN    flash attention, required by any quantized KV (default: false)
 #   LLAMA_HERD_MMPROJ_URL    multimodal projector, for vision models
+#   LLAMA_HERD_SPEC_TYPE     speculative draft source: none | lookup   (default: none)
+#   LLAMA_HERD_SPEC_MAX      tokens proposed per step                  (default: 4)
+#   LLAMA_HERD_SPEC_PATTERN  lookup match length                       (default: 3)
 #
 # Quantized KV is what makes long context fit — f16 costs twice q8 per token — but it does
 # not work without flash attention, so the two are set together or not at all.
@@ -65,6 +68,19 @@ if [ ! -f "$MANIFEST" ]; then
       \"vision_gpu\": true"
   fi
 
+  # Speculation is off unless asked for. Every proposal occupies a batch entry, so it
+  # trades batch capacity for tokens that may be rejected — worth it where output repeats
+  # context, wasteful where it does not.
+  SPEC_JSON=""
+  if [ -n "${LLAMA_HERD_SPEC_TYPE:-}" ] && [ "${LLAMA_HERD_SPEC_TYPE}" != "none" ]; then
+    SPEC_JSON=",
+      \"speculation\": {
+        \"type\": \"${LLAMA_HERD_SPEC_TYPE}\",
+        \"max_draft\": ${LLAMA_HERD_SPEC_MAX:-4},
+        \"pattern\": ${LLAMA_HERD_SPEC_PATTERN:-3}
+      }"
+  fi
+
   cat > "$MANIFEST" <<JSON
 {
   "listen": ":8080",
@@ -79,7 +95,7 @@ if [ ! -f "$MANIFEST" ]; then
       "load_mtp": ${LLAMA_HERD_LOAD_MTP:-false},
       "kv_type_k": "${LLAMA_HERD_KV_TYPE_K:-f16}",
       "kv_type_v": "${LLAMA_HERD_KV_TYPE_V:-f16}",
-      "flash_attention": ${LLAMA_HERD_FLASH_ATTN:-false}${MMPROJ_JSON}
+      "flash_attention": ${LLAMA_HERD_FLASH_ATTN:-false}${MMPROJ_JSON}${SPEC_JSON}
     }
   ]
 }
