@@ -116,9 +116,45 @@ func (s Shape) KVBytesPerToken(p KVPrecision) float64 {
 		(float64(s.KeyLength) + float64(s.ValueLength)) * p.Bytes
 }
 
+// MTPDraftLayers is how many layers the MTP draft context caches.
+//
+// Speculating from a model's own prediction head opens a second context over the same
+// weights, and that context allocates its own KV cache — it does not share the target's. The
+// weights are not duplicated, so the cost is KV alone, but it is charged at the same context
+// length and precision as the target.
+//
+// This is the term that is easy to omit and expensive to omit: a plan that fits without it
+// loads, reports healthy, and then dies on the first batch large enough to need compute
+// buffers that are no longer there.
+func (s Shape) MTPDraftLayers(declared int) int {
+	if declared < 1 {
+		return 0
+	}
+	// The head's layers cache like any other attention layer. A hybrid model's interval
+	// applies to its body, not to the appended head, so these are counted in full.
+	return declared
+}
+
+// MTPDraftBytes is the KV a draft context adds, for a given total context and precision.
+func (s Shape) MTPDraftBytes(declared int, p KVPrecision, totalTokens int64) int64 {
+	n := s.MTPDraftLayers(declared)
+	if n == 0 || totalTokens <= 0 {
+		return 0
+	}
+	perToken := float64(n) * float64(s.HeadsKV) *
+		(float64(s.KeyLength) + float64(s.ValueLength)) * p.Bytes
+	return int64(perToken * float64(totalTokens))
+}
+
 // FitInput describes a card and a model file.
 type FitInput struct {
 	Shape Shape
+	// MTPLayers is the model's declared prediction-head layers. Non-zero only charges for a
+	// draft context when Speculate is set, since loading a head and drafting from it are
+	// different decisions with different costs.
+	MTPLayers int
+	// Speculate charges for the draft context an "mtp" speculation type would open.
+	Speculate bool
 	// WeightBytes is the size of the model file, which is what the weights occupy once
 	// resident.
 	WeightBytes uint64
@@ -139,6 +175,9 @@ type FitResult struct {
 	KVBudget    int64 // bytes available for the KV cache
 	PerToken    float64
 	TotalTokens int64 // total context across every stream
+	// MTPPerToken is the share of PerToken belonging to an MTP draft context, so a caller
+	// can report what speculation costs rather than only that it was charged.
+	MTPPerToken float64
 }
 
 // Fit computes how much total context fits, at one KV precision.
@@ -149,6 +188,15 @@ func Fit(in FitInput, p KVPrecision) FitResult {
 	}
 	budget := int64(in.VRAMBytes) - int64(in.WeightBytes) - int64(overhead)
 	r := FitResult{Precision: p, KVBudget: budget, PerToken: in.Shape.KVBytesPerToken(p)}
+	// A draft context caches the head's layers over the same context, so the per-token cost
+	// rises rather than the budget falling. Charging it here keeps every derived figure —
+	// total tokens, the per-stream plan, the weight budget — consistent with it.
+	if in.Speculate && in.MTPLayers > 0 {
+		r.MTPPerToken = float64(in.Shape.MTPDraftLayers(in.MTPLayers)) *
+			float64(in.Shape.HeadsKV) *
+			(float64(in.Shape.KeyLength) + float64(in.Shape.ValueLength)) * p.Bytes
+		r.PerToken += r.MTPPerToken
+	}
 	if budget > 0 && r.PerToken > 0 {
 		r.TotalTokens = int64(float64(budget) / r.PerToken)
 	}

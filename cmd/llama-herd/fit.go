@@ -22,6 +22,7 @@ func fitCmd(args []string) int {
 	fs := newFlagSet("fit")
 	card := fs.String("card", "3090", "target card: 3090, 4090, 5090, or a size in GiB")
 	streams := fs.Int("streams", 4, "streams to plan for")
+	speculate := fs.Bool("speculate", false, "charge for the MTP draft context that \"type\": \"mtp\" opens")
 	ctx := fs.String("context", "128k", "context per stream, e.g. 32k or 128000")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -75,10 +76,13 @@ func fitCmd(args []string) int {
 		return 1
 	}
 
+	mtp := m.MTP()
 	in := llama.FitInput{
 		Shape:       shape,
 		WeightBytes: uint64(st.Size()),
 		VRAMBytes:   vram,
+		MTPLayers:   mtp.DeclaredLayers,
+		Speculate:   *speculate,
 	}
 
 	fmt.Printf("%s\n", path)
@@ -92,8 +96,24 @@ func fitCmd(args []string) int {
 	}
 	fmt.Println()
 	fmt.Printf("  card %s: %s VRAM\n", *card, llama.GiB(int64(vram)))
-	fmt.Printf("  weights: %s   reserved for compute: %s\n\n",
+	fmt.Printf("  weights: %s   reserved for compute: %s\n",
 		llama.GiB(st.Size()), llama.GiB(llama.DefaultOverhead))
+	// Drafting from the head is a second context over the same weights, and it caches. A
+	// plan that omits this loads and then dies on the first large batch, so it is stated
+	// whether or not it was asked for.
+	switch {
+	case mtp.DeclaredLayers > 0 && *speculate:
+		fmt.Printf("  speculation: charging an MTP draft context over %d declared head layer(s)\n\n",
+			mtp.DeclaredLayers)
+	case mtp.DeclaredLayers > 0:
+		fmt.Printf("  speculation: %d MTP head layer(s) declared, NOT charged — pass --speculate\n"+
+			"               to include the draft context that \"type\": \"mtp\" opens\n\n",
+			mtp.DeclaredLayers)
+	case *speculate:
+		fmt.Printf("  speculation: requested, but this file declares no MTP layers — nothing to charge\n\n")
+	default:
+		fmt.Println()
+	}
 
 	fmt.Println("  Total context that fits, by KV precision:")
 	fmt.Println("    precision   per token    KV budget     total context")
