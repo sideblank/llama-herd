@@ -104,8 +104,16 @@ type Model struct {
 
 // Speculation selects a draft source and how far ahead it proposes.
 type Speculation struct {
-	// Type is the draft source. "lookup" predicts from the sequence's own context and
-	// costs no memory; it contributes only where output repeats context.
+	// Type is the draft source.
+	//
+	//   lookup — predicts from the sequence's own context. Costs no memory and works on
+	//            any model, but contributes only where output repeats context.
+	//   mtp    — uses the model's own trained prediction head. Costs the memory that head
+	//            occupies and works on any output, but only for models that carry one and
+	//            quantizations that kept it.
+	//
+	// A model whose head was stripped in quantization falls back rather than failing, so
+	// check the acceptance rate rather than assuming it is running.
 	Type string `json:"type"`
 	// MaxDraft bounds tokens proposed per step. Larger drafts win more when they land and
 	// waste more batch space when they do not, so this trades against stream count.
@@ -257,10 +265,14 @@ func (m *Manifest) Validate() error {
 
 		if sp := mm.Speculation; sp != nil {
 			switch sp.Type {
-			case "", "none", "lookup":
+			case "", "none", "lookup", "mtp":
 			default:
 				problems = append(problems, fmt.Sprintf(
-					"%s: speculation type %q is not one of none, lookup", where, sp.Type))
+					"%s: speculation type %q is not one of none, lookup, mtp", where, sp.Type))
+			}
+			if sp.Type == "mtp" && !mm.LoadMTP {
+				problems = append(problems, where+
+					": speculation type mtp needs load_mtp true, or the head is not resident to drive")
 			}
 			// Every draft occupies a batch entry, so a full herd drafting at once needs
 			// room for all of it or the batch overruns.

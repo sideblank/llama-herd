@@ -261,3 +261,40 @@ func TestNoDrafterProposesNothing(t *testing.T) {
 		t.Fatal("acceptance rate should be zero when nothing was proposed")
 	}
 }
+
+// observingDrafter records how often it was shown a decode, to prove a state-predicting
+// drafter sees every pass rather than only the ones where a draft is wanted.
+type observingDrafter struct {
+	scriptedDrafter
+	observed int
+}
+
+func (d *observingDrafter) ObserveDecode() error { d.observed++; return nil }
+
+// A drafter predicting from the target's internal state must be shown every decode. Showing
+// it only when drafting would leave it working from state several steps stale, and its
+// proposals would quietly stop being accepted with nothing to explain why.
+func TestStatePredictingDrafterSeesEveryDecode(t *testing.T) {
+	f := newFake(1, 16)
+	f.script[0] = []Token{'a', 'b', 'c', 'd'}
+	d := &observingDrafter{scriptedDrafter: scriptedDrafter{propose: []Token{'x'}, max: 1}}
+
+	e := New(f, Config{Drafter: d})
+	defer run(t, e)()
+
+	s, err := e.Submit(context.Background(), Request{Prompt: "hello", MaxTokens: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, s)
+
+	st := e.Stats()
+	if d.observed == 0 {
+		t.Fatal("the drafter was never shown a decode")
+	}
+	// Every pass must be observed, including the prefill passes where no draft is wanted.
+	if uint64(d.observed) != st.DecodePasses {
+		t.Fatalf("observed %d decodes but %d passes ran — a state-predicting drafter must see "+
+			"all of them", d.observed, st.DecodePasses)
+	}
+}

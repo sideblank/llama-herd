@@ -42,6 +42,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN git clone --depth 1 --branch ${LLAMA_CPP_REF} \
       https://github.com/ggml-org/llama.cpp.git /src/llama.cpp
 
+# LLAMA_BUILD_COMMON is ON because the speculative implementation lives there. Driving a
+# multi-token-prediction head needs the target's hidden states, and that function is not in
+# the installed public header — it is in a staging header upstream marks work-in-progress and
+# asks callers not to include. Going through common uses upstream's maintained implementation
+# instead, which also covers all three head architectures rather than one.
+#
 # LLAMA_BUILD_MTMD builds libmtmd, the multimodal library behind vision and audio input.
 # Its standalone hook exists for exactly this case — packaging the library for a language
 # binding — and it fires only when common and tools are off, which is this configuration.
@@ -68,7 +74,7 @@ RUN cmake -S /src/llama.cpp -B /src/build \
       -DGGML_CUDA_FA_ALL_QUANTS=${GGML_CUDA_FA_ALL_QUANTS} \
       -DGGML_CUDA_FORCE_MMQ=${GGML_CUDA_FORCE_MMQ} \
       -DCMAKE_CUDA_ARCHITECTURES="86;89;120" \
-      -DLLAMA_BUILD_COMMON=OFF \
+      -DLLAMA_BUILD_COMMON=ON \
       -DLLAMA_BUILD_TESTS=OFF \
       -DLLAMA_BUILD_EXAMPLES=OFF \
       -DLLAMA_BUILD_TOOLS=OFF \
@@ -79,6 +85,35 @@ RUN cmake -S /src/llama.cpp -B /src/build \
       -DCMAKE_INSTALL_PREFIX=/opt/llama \
  && cmake --build /src/build --config Release -j "$(nproc)" \
  && cmake --install /src/build
+
+# The speculative shim: a pointer-only C ABI over common's C++ interface, which passes
+# std::vector and references that cgo cannot bind. Built here, against the same llama.cpp
+# tree, so the ABI cannot drift between the shim and the library it wraps.
+COPY shim/ /shim/
+RUN set -eux; \
+    # Locate the common library rather than assuming a path: its name and directory depend
+    # on whether the build produced shared or static libraries, and a wrong guess fails at
+    # link time with a message about a missing file rather than about the assumption.
+    LC="$(find /src/build -name 'libllama-common.*' -type f | head -1)"; \
+    test -n "$LC" || { echo "common library not found — is LLAMA_BUILD_COMMON on?"; exit 1; }; \
+    echo "linking against $LC"; \
+    case "$LC" in \
+      *.a) WHOLE="-Wl,--whole-archive $LC -Wl,--no-whole-archive" ;; \
+      *)   WHOLE="$LC" ;; \
+    esac; \
+    g++ -O2 -fPIC -shared -std=c++17 \
+        -I/src/llama.cpp/include -I/src/llama.cpp/ggml/include -I/src/llama.cpp/common \
+        -I/shim \
+        /shim/lhspec.cpp \
+        -o /opt/llama/lib/liblhspec.so \
+        -L"$(dirname "$LC")" -L/opt/llama/lib \
+        $WHOLE \
+        -lllama -lggml -lggml-base \
+        -Wl,-rpath,'$ORIGIN' -Wl,--allow-shlib-undefined; \
+    cp /shim/lhspec.h /opt/llama/include/; \
+    # A shared common must ship too, or the runtime image loads a library whose dependency
+    # is absent — a failure that appears only when the server starts.
+    case "$LC" in *.so*) cp -P "$(dirname "$LC")"/libllama-common.so* /opt/llama/lib/ ;; esac
 
 # --- llama-herd ------------------------------------------------------------------------
 FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION} AS build

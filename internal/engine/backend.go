@@ -86,6 +86,19 @@ type Drafter interface {
 	MaxDraft() int
 }
 
+// BatchObserver is an optional Drafter capability: a drafter that predicts from the target's
+// internal state must see every decode, not only the ones where a draft is wanted.
+//
+// A trained prediction head works from the hidden states the target produced, so it has to be
+// shown each batch as it is decoded. Calling it only when drafting would leave it predicting
+// from state several steps stale, and the drafts would be wrong for a reason no counter would
+// explain — they would simply stop being accepted.
+type BatchObserver interface {
+	// ObserveDecode is called after each successful forward pass, before drafts are
+	// requested for the next one.
+	ObserveDecode() error
+}
+
 // Seeder is an optional Drafter capability: a drafter that predicts from context wants the
 // prompt, not just the tokens generated after it.
 //

@@ -160,6 +160,20 @@ func serve(args []string) int {
 		}
 
 		ecfg := engine.Config{MaxQueue: mm.MaxQueue}
+		if sp := mm.Speculation; sp != nil && sp.Type == "mtp" {
+			// A model whose head was stripped in quantization cannot draft. That is a
+			// configuration mistake worth naming rather than a reason to refuse service,
+			// so it degrades to ordinary decoding and says so.
+			spec, err := llama.OpenSpeculative(r, "draft-mtp", sp.MaxDraft)
+			if err != nil {
+				log.Printf("  %s speculation: mtp unavailable (%v) — serving without it. "+
+					"Check that this quantization kept its prediction head.", mm.Name, err)
+			} else {
+				ecfg.Drafter = spec
+				defer spec.Close()
+				log.Printf("  %s speculation: mtp, up to %d tokens", mm.Name, spec.MaxDraft())
+			}
+		}
 		if sp := mm.Speculation; sp != nil && sp.Type == "lookup" {
 			lk := draft.NewLookup(sp.MaxDraft)
 			if sp.Pattern > 0 {

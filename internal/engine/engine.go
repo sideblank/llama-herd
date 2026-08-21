@@ -436,7 +436,14 @@ func (e *Engine) tick(active map[SeqID]*slot) error {
 	}
 
 	e.c.passes.Add(1)
-	if err := e.be.Decode(); err != nil {
+	// A drafter predicting from the target's internal state must see every decode. This
+	// runs after the pass below, not before, since there is nothing to observe until the
+	// target has produced it.
+	decodeErr := e.be.Decode()
+	if ob, ok := e.drafter.(BatchObserver); ok && ob != nil && decodeErr == nil {
+		_ = ob.ObserveDecode()
+	}
+	if err := decodeErr; err != nil {
 		if errors.Is(err, ErrNoKVSlot) {
 			// The cache is full, not broken. Evict the longest-running stream so the
 			// rest make progress rather than deadlocking on a full cache.
