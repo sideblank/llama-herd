@@ -1,0 +1,12 @@
+# Normalise line endings on checkout everywhere.
+#
+# Without this, a Windows clone gets CRLF, which breaks two things: gofmt reports every
+# Go file as unformatted, and the shell hooks in .githooks fail to execute.
+* text=auto eol=lf
+
+# Never touch binary content.
+*.png binary
+*.jpg binary
+*.gguf binary
+*.onnx binary
+*.safetensors binary
