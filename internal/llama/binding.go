@@ -64,13 +64,30 @@ type ModelParams struct {
 	// NGPULayers is how many layers to place in VRAM. Negative means all of them.
 	NGPULayers int32
 	// MainGPU is the device index used when the model is not split.
-	MainGPU  int32
-	UseMmap  bool
-	UseMlock bool
+	MainGPU int32
+	// LoadMode selects mmap, mlock, direct I/O, or a combination. It replaced the
+	// separate boolean flags upstream.
+	LoadMode LoadMode
 	// VocabOnly loads metadata and the vocabulary without the weights. Useful for
 	// inspecting a file cheaply.
 	VocabOnly bool
+	// LoadMTP loads the model's multi-token-prediction layers, if the file carries
+	// them. Many third-party quantizations strip these tensors, in which case there is
+	// nothing to load and speculative decoding through the MTP head is unavailable.
+	LoadMTP bool
 }
+
+// LoadMode selects how weights are brought into memory.
+type LoadMode int32
+
+const (
+	LoadModeAuto      LoadMode = C.LLAMA_LOAD_MODE_AUTO
+	LoadModeNone      LoadMode = C.LLAMA_LOAD_MODE_NONE
+	LoadModeMmap      LoadMode = C.LLAMA_LOAD_MODE_MMAP
+	LoadModeMlock     LoadMode = C.LLAMA_LOAD_MODE_MLOCK
+	LoadModeMmapMlock LoadMode = C.LLAMA_LOAD_MODE_MMAP_MLOCK
+	LoadModeDirectIO  LoadMode = C.LLAMA_LOAD_MODE_DIRECT_IO
+)
 
 // DefaultModelParams returns libllama's defaults, so callers override rather than
 // construct a params struct from zero and accidentally disable mmap.
@@ -79,9 +96,9 @@ func DefaultModelParams() ModelParams {
 	return ModelParams{
 		NGPULayers: int32(c.n_gpu_layers),
 		MainGPU:    int32(c.main_gpu),
-		UseMmap:    bool(c.use_mmap),
-		UseMlock:   bool(c.use_mlock),
+		LoadMode:   LoadMode(c.load_mode),
 		VocabOnly:  bool(c.vocab_only),
+		LoadMTP:    bool(c.load_mtp),
 	}
 }
 
@@ -89,9 +106,9 @@ func (p ModelParams) c() C.struct_llama_model_params {
 	c := C.llama_model_default_params()
 	c.n_gpu_layers = C.int32_t(p.NGPULayers)
 	c.main_gpu = C.int32_t(p.MainGPU)
-	c.use_mmap = C.bool(p.UseMmap)
-	c.use_mlock = C.bool(p.UseMlock)
+	c.load_mode = C.enum_llama_load_mode(p.LoadMode)
 	c.vocab_only = C.bool(p.VocabOnly)
+	c.load_mtp = C.bool(p.LoadMTP)
 	return c
 }
 
@@ -148,7 +165,19 @@ type ContextParams struct {
 	Embeddings bool
 	// OffloadKQV places the KV cache and attention ops on the GPU.
 	OffloadKQV bool
+	// CtxType selects the context kind. Use CtxTypeMTP for a context that drives the
+	// model's multi-token-prediction head, which requires the weights to have been
+	// loaded with LoadMTP.
+	CtxType ContextType
 }
+
+// ContextType distinguishes an ordinary decode context from a multi-token-prediction one.
+type ContextType int32
+
+const (
+	CtxTypeDefault ContextType = C.LLAMA_CONTEXT_TYPE_DEFAULT
+	CtxTypeMTP     ContextType = C.LLAMA_CONTEXT_TYPE_MTP
+)
 
 // DefaultContextParams returns libllama's defaults.
 func DefaultContextParams() ContextParams {
@@ -162,6 +191,7 @@ func DefaultContextParams() ContextParams {
 		NThreadsBatch: int32(c.n_threads_batch),
 		Embeddings:    bool(c.embeddings),
 		OffloadKQV:    bool(c.offload_kqv),
+		CtxType:       ContextType(c.ctx_type),
 	}
 }
 
@@ -175,6 +205,7 @@ func (p ContextParams) c() C.struct_llama_context_params {
 	c.n_threads_batch = C.int32_t(p.NThreadsBatch)
 	c.embeddings = C.bool(p.Embeddings)
 	c.offload_kqv = C.bool(p.OffloadKQV)
+	c.ctx_type = C.enum_llama_context_type(p.CtxType)
 	return c
 }
 

@@ -62,10 +62,17 @@ This was measured on a real third-party quant, not assumed.
 
 Consequently the model builds are not a branding exercise. Retaining MTP heads, choosing KV
 precision, and picking quantization for this runtime is what makes the fastest path reachable at
-all. Work items:
+all.
 
-- Verify llama.cpp's MTP/speculative support against a quant that retains `nextn` tensors.
-- Build and publish a quant that keeps them, and measure accept rate.
+**Upstream support is already there.** At the pinned llama.cpp revision, MTP is first-class in the
+public API: `llama_model_params.load_mtp` loads the MTP layers, and a context can be created as
+`LLAMA_CONTEXT_TYPE_MTP`. Both are exposed by the binding. So the missing piece is not runtime
+support — it is a quantization that still contains the tensors to load.
+
+Work items:
+
+- Build a quant that retains the MTP tensors, and confirm `load_mtp` finds them.
+- Measure accept rate and the real end-to-end speedup, per model and per card.
 - Fall back to draft-model speculative decoding where a model has no native MTP head.
 
 ## 3. Long context, and the constraint that bites
