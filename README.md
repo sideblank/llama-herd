@@ -143,6 +143,10 @@ Per-request sampling is honoured — `temperature`, `top_p`, `top_k`, `min_p`, t
 `seed` layer over the model's manifest defaults, and an explicit `"temperature": 0` means greedy
 rather than "unset".
 
+`GET /v1/info` reports the build and the hardware actually in use, and says so explicitly when
+no accelerator was found. Worth checking after any deploy: a server that silently fell back to
+CPU answers every request correctly and passes its health check, so nothing else reveals it.
+
 `GET /v1/models` lists what is loaded. `GET /health` reports per-model liveness and returns
 503 if a model's decode loop has died — so a load balancer stops sending traffic to a server
 that is still listening but can no longer answer.

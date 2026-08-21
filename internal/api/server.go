@@ -20,11 +20,26 @@ type Clock func() time.Time
 
 // Server exposes a registry over HTTP.
 type Server struct {
-	reg   *engine.Registry
-	now   Clock
-	seq   atomic.Uint64
-	idPfx string
+	reg     *engine.Registry
+	now     Clock
+	seq     atomic.Uint64
+	idPfx   string
+	devices Devices
+	build   BuildInfo
 }
+
+// BuildInfo describes the running binary.
+type BuildInfo struct {
+	Version     string `json:"version"`
+	Commit      string `json:"commit"`
+	LlamaCppRef string `json:"llama_cpp_ref"`
+}
+
+// WithDevices makes the server report the hardware it found.
+func (s *Server) WithDevices(d Devices) *Server { s.devices = d; return s }
+
+// WithBuild makes the server report which build is running.
+func (s *Server) WithBuild(b BuildInfo) *Server { s.build = b; return s }
 
 // New builds a server over reg.
 func New(reg *engine.Registry) *Server {
@@ -35,6 +50,7 @@ func New(reg *engine.Registry) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.health)
+	mux.HandleFunc("GET /v1/info", s.info)
 	mux.HandleFunc("GET /v1/models", s.listModels)
 	mux.HandleFunc("POST /v1/chat/completions", s.chatCompletions)
 	return mux
@@ -44,6 +60,25 @@ func (s *Server) writeErr(w http.ResponseWriter, status int, kind, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(apiError{apiErrorBody{Message: msg, Type: kind}})
+}
+
+// Devices is set by the server owner to report what hardware the process actually found.
+//
+// This exists because the most damaging failure in a GPU runtime is silent: when backends
+// are not registered or the driver is absent, the server finds no accelerator, runs on CPU,
+// and reports itself perfectly healthy. Nothing in a chat response reveals it — only the
+// throughput, and only if you know what to expect. A deployed instance must be able to say
+// what it is running on.
+type Devices func() []DeviceInfo
+
+// DeviceInfo is one accelerator or CPU the process can see.
+type DeviceInfo struct {
+	Index       int    `json:"index"`
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	TotalBytes  uint64 `json:"total_bytes"`
+	FreeBytes   uint64 `json:"free_bytes"`
+	Description string `json:"description,omitempty"`
 }
 
 // health reports per-model liveness. A model whose decode loop has died makes this
@@ -74,6 +109,38 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	if !out.OK {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// info reports the build and the hardware in use.
+//
+// The accelerated field is the one that matters: a server that found no accelerator still
+// answers requests correctly, just far more slowly, so this is the only cheap way to tell a
+// working deployment from a silently degraded one.
+func (s *Server) info(w http.ResponseWriter, _ *http.Request) {
+	var out struct {
+		Build       BuildInfo    `json:"build"`
+		Accelerated bool         `json:"accelerated"`
+		Devices     []DeviceInfo `json:"devices"`
+		Models      []string     `json:"models"`
+		Warning     string       `json:"warning,omitempty"`
+	}
+	out.Build = s.build
+	out.Models = s.reg.Names()
+	if s.devices != nil {
+		out.Devices = s.devices()
+	}
+	for _, d := range out.Devices {
+		if d.Type == "gpu" {
+			out.Accelerated = true
+		}
+	}
+	if !out.Accelerated {
+		out.Warning = "no dedicated-memory GPU found — this process is running on CPU. " +
+			"Requests will be answered correctly but far more slowly."
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
 }
 

@@ -322,3 +322,78 @@ func TestNoSamplingFieldsMeansNoOverride(t *testing.T) {
 		t.Fatalf("expected nil override, got %+v", p)
 	}
 }
+
+// A GPU runtime that silently falls back to CPU answers correctly and reports itself
+// healthy. The only cheap way to tell is to ask what hardware it found.
+func TestInfoReportsHardwareAndWarnsOnCPUOnly(t *testing.T) {
+	ts, done := newTestServer(t, "hi")
+	defer done()
+
+	resp, err := http.Get(ts.URL + "/v1/info")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var got struct {
+		Build       BuildInfo    `json:"build"`
+		Accelerated bool         `json:"accelerated"`
+		Devices     []DeviceInfo `json:"devices"`
+		Models      []string     `json:"models"`
+		Warning     string       `json:"warning"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	// The test server reports no devices, which must read as unaccelerated with a warning
+	// rather than as silence.
+	if got.Accelerated {
+		t.Error("no devices reported, so accelerated must be false")
+	}
+	if got.Warning == "" {
+		t.Error("a CPU-only process must say so; silence is the failure mode this prevents")
+	}
+	if len(got.Models) != 1 || got.Models[0] != "test-model" {
+		t.Errorf("models = %v", got.Models)
+	}
+}
+
+func TestInfoReportsGPUWhenPresent(t *testing.T) {
+	f := enginetest.New(2, 32, "hi")
+	reg := engine.NewRegistry()
+	if err := reg.Add("m", engine.New(f, engine.Config{}), echoRenderer{}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(reg).
+		WithBuild(BuildInfo{Version: "v1", LlamaCppRef: "b10545"}).
+		WithDevices(func() []DeviceInfo {
+			return []DeviceInfo{{Index: 0, Name: "Test GPU", Type: "gpu", TotalBytes: 24 << 30}}
+		})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/v1/info")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var got struct {
+		Build       BuildInfo    `json:"build"`
+		Accelerated bool         `json:"accelerated"`
+		Devices     []DeviceInfo `json:"devices"`
+		Warning     string       `json:"warning"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Accelerated {
+		t.Error("a gpu device must mark the process accelerated")
+	}
+	if got.Warning != "" {
+		t.Errorf("no warning expected when a GPU is present, got %q", got.Warning)
+	}
+	if got.Build.LlamaCppRef != "b10545" {
+		t.Errorf("build info missing: %+v", got.Build)
+	}
+}

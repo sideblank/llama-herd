@@ -102,6 +102,16 @@ CPU faults on any older machine the container is scheduled onto.
 no-ops under emulation — printing nothing, copying no dependencies, and making the gate pass
 vacuously. Use static inspection.
 
+## Deployment
+
+**A GPU runtime that finds no GPU still works.** It answers every request correctly, passes
+its health check, and runs an order of magnitude slower. Nothing in a response reveals it,
+and throughput only reveals it if you already know what to expect.
+
+`GET /v1/info` reports the devices actually found and says plainly when none is accelerated.
+Check it after every deploy. Judging from response latency alone is unreliable — network
+round trip hides a lot at small model sizes.
+
 ## Operations
 
 **Some settings are creation-time-immutable.** Container-group priority is accepted at create
