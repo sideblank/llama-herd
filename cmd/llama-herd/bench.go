@@ -260,6 +260,8 @@ func remoteBench(args []string) int {
 	workload := fs.String("workload", "", "named workload shaped like real traffic")
 	// Some hosts authenticate with their own header rather than a bearer token.
 	hdr := fs.String("header", "", "extra header, as Name:Value; repeat with commas")
+	jsonPath := fs.String("json", "", "write the machine-readable report here")
+	mdPath := fs.String("markdown", "", "write the publishable report here")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -309,6 +311,7 @@ func remoteBench(args []string) int {
 		"note: rates below include network and host contention. Tokens-per-pass comes from\n"+
 			"      the server's own counters and is unaffected by either.")
 
+	report := &bench.Report{}
 	for _, n := range counts {
 		fmt.Fprintf(os.Stderr, "\nmeasuring %d stream(s)...\n", n)
 		res, err := bench.RunRemote(ctx, r, bench.Config{
@@ -318,18 +321,30 @@ func remoteBench(args []string) int {
 			fmt.Fprintln(os.Stderr, "bench:", err)
 			return 1
 		}
+		report.Results = append(report.Results, res)
 		fmt.Fprintf(os.Stderr, "  client : decode %.1f tok/s, end-to-end %.1f tok/s, TTFT p50 %v\n",
 			res.DecodeTokPerSec, res.EndToEndTokPerSec, res.TTFTp50.Round(time.Millisecond))
 		fmt.Fprintf(os.Stderr, "  server : %.2f tokens/pass over %d passes, %d tokens, %d evictions\n",
 			res.TokensPerPass, res.DecodePasses, res.ServerTokens, res.Evictions)
-		if res.MTPLoaded {
-			if res.TokensPerPass > float64(n)*1.05 {
-				fmt.Fprintf(os.Stderr, "  MTP    : loaded and ACCEPTING — %.2fx the %d-stream baseline\n",
-					res.TokensPerPass/float64(n), n)
-			} else {
-				fmt.Fprintf(os.Stderr, "  MTP    : loaded but NOT accepting — occupying memory, "+
-					"returning nothing\n")
-			}
+		// Drafted and accepted are counted by the engine and mean exactly one thing, so
+		// they are reported ahead of the tokens-per-pass ratio they replace.
+		if res.DraftsProposed > 0 {
+			fmt.Fprintf(os.Stderr, "  drafts : %d proposed, %d accepted — %.1f%% acceptance\n",
+				res.DraftsProposed, res.DraftsAccepted, res.AcceptanceRate*100)
+		} else if res.MTPLoaded {
+			fmt.Fprintf(os.Stderr, "  drafts : none proposed. The head is resident and nothing "+
+				"is drafting from it.\n")
+		}
+	}
+
+	if *jsonPath != "" || *mdPath != "" {
+		// The environment block describes the machine that ran the engine, which for a
+		// remote target is not this one. Only what the server reported is filled in, so a
+		// reader is not told this client's CPU count measured that GPU.
+		report.Environment = bench.Environment{ModelName: *model}
+		if err := writeReport(report, *jsonPath, *mdPath); err != nil {
+			fmt.Fprintln(os.Stderr, "bench:", err)
+			return 1
 		}
 	}
 	return 0
