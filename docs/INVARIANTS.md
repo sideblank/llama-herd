@@ -168,6 +168,10 @@ round trip hides a lot at small model sizes.
 and ignored on update; image caching likewise. Getting them wrong means recreating, not
 patching.
 
+**A queued change blocks the next one.** Patching while a change is pending is refused with a
+bad-request error that says nothing about why. Wait for the queue to drain before every patch,
+not only before reading a result back.
+
 **An image change is queued, not applied.** Reading the image back straight after a patch
 returns the old value, which is indistinguishable from a silently dropped patch. Wait for the
 provider's pending-change flag to clear before judging, then read back — both steps, because
