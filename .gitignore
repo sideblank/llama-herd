@@ -1,0 +1,40 @@
+# Assistant / agent tooling — never checked in
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+.claude.json
+.claude.local.json
+.mcp.json
+.aider*
+.cursor/
+.cursorrules
+.github/copilot-instructions.md
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Build output
+/bin/
+/dist/
+*.so
+*.a
+*.o
+*.test
+*.exe
+
+# Model weights & artifacts
+*.gguf
+*.onnx
+*.safetensors
+/models/
+/weights/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/

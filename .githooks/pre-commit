@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Enforces the single permitted commit identity for this repo.
+set -euo pipefail
+REQUIRED_EMAIL="benjamin.goldman@gmail.com"
+
+email="$(git config user.email || true)"
+if [ "$email" != "$REQUIRED_EMAIL" ]; then
+  cat >&2 <<MSG
+pre-commit: rejected — commit email is "${email:-<unset>}", but this repo requires
+"$REQUIRED_EMAIL".
+
+Fix it for this repo with:
+  git config user.email "$REQUIRED_EMAIL"
+  git config user.name  "Benjamin Goldman"
+
+This repo is published; commits must not carry personal or assistant addresses.
+MSG
+  exit 1
+fi

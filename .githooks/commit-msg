@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Commits in this repo have exactly one author and no tool attribution.
+# See CONTRIBUTING.md.
+set -euo pipefail
+msg_file="$1"
+
+if grep -qiE '^Co-Authored-By:' "$msg_file"; then
+  cat >&2 <<'MSG'
+commit-msg: rejected — Co-Authored-By trailer found.
+
+Commits in this repo have a single author and carry no co-author trailers.
+Remove the line and commit again.
+MSG
+  exit 1
+fi
+
+if grep -qiE '^(Claude-Session:|Generated with)|noreply@anthropic\.com|claude\.(ai|com)' "$msg_file"; then
+  cat >&2 <<'MSG'
+commit-msg: rejected — assistant/tool attribution found.
+
+Commit messages describe the change only: no session links, no "Generated with ..."
+lines, no assistant addresses or URLs.
+MSG
+  exit 1
+fi
