@@ -23,12 +23,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux runs on every change. macOS and Windows bill at 10x and 2x minutes
-          # respectively, so on a private repo they are gated to pull requests and manual
-          # runs rather than every push — a full matrix on every commit exhausts a month
-          # of included minutes in a couple of days.
+          # No macOS here. It bills at 10x the minute rate, and on a private repo a
+          # handful of runs consumes the whole monthly allowance — 180 macOS minutes
+          # cost 1,800 of 2,000 included minutes and blocked every other workflow.
+          # macOS still builds in the release workflow, which runs only on tags, so
+          # darwin binaries still ship without paying that rate on every change.
+          #
+          # Windows bills at 2x, so it runs on pull requests and on demand rather than
+          # on every push.
           - {name: linux-amd64,   os: ubuntu-latest,  always: true}
-          - {name: macos-arm64,   os: macos-14,       always: false}
           - {name: windows-amd64, os: windows-latest, always: false}
     if: >-
       matrix.always ||

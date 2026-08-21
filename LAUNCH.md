@@ -41,6 +41,21 @@ cheap now and expensive once history accumulates.
 - [ ] Decide whether `Co-authored-by` should stay banned. It is currently rejected by the trailer
       allow-list, which also blocks GitHub's pair-programming attribution.
 
+## CI cost
+
+Actions minutes are the constraint while the repo is private; they are free and unlimited
+once it is public.
+
+- [x] macOS removed from the per-change build. It bills at **10x** — 180 macOS minutes
+      consumed 1,800 of 2,000 included minutes and blocked every workflow, including the
+      image build.
+- [ ] Decide whether darwin release binaries are worth ~200 included minutes per tag. They
+      require macOS runners because cgo cannot cross-compile. The alternative is to ship
+      Linux and Windows and let Mac users build from source.
+- [ ] Raise the org spending limit above its $0 default, or go public. At $0 a blocked job
+      reports "recent account payments have failed or your spending limit needs to be
+      increased", which reads like a payment problem and is not one.
+
 ## At launch
 
 - [ ] **Final history scrub.** Public git history is permanent. Run `./scripts/check-leaks.sh`

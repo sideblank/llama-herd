@@ -26,6 +26,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The two darwin targets need macOS runners: cgo rules out cross-compiling, so
+          # a Mac binary can only be built on a Mac. At 10x the minute rate that is
+          # roughly 200 included minutes per release — acceptable on a tag, which is why
+          # macOS was removed from the per-change build workflow but kept here.
           - {name: linux-amd64,   os: ubuntu-latest,     ext: tar.gz}
           - {name: linux-arm64,   os: ubuntu-24.04-arm,  ext: tar.gz}
           - {name: darwin-arm64,  os: macos-14,          ext: tar.gz}
