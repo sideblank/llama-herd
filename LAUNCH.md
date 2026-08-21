@@ -5,26 +5,30 @@ grouped by their real deadline, which is not always "at launch".
 
 ---
 
-## Before the code import
+## Before the first code commit
 
-The moment engine code is copied in, decisions become facts recorded in history. These are cheap
-now and expensive later.
+llama-herd is a **rewrite**, not a port — no code is copied in from anywhere. These items are
+cheap now and expensive once history accumulates.
 
 - [x] **Chain of title recorded** in [PROVENANCE.md](PROVENANCE.md). Sole authorship verified
       against the source history (54 commits, one author). The assignment and licence to Liminal
       Intelligence are both drafted but **unexecuted**, so the copyright sits personally with
       Benjamin Goldman and no counterparty consent is needed to release under Apache-2.0.
-- [ ] **Sign and date PROVENANCE.md** when the first import commit lands. Do not backdate.
-- [ ] **If the drafted IP assignment is later executed**, record the Apache-2.0 release as an
-      existing encumbrance in its schedule of assigned property, or the schedule will be wrong.
+- [ ] **Sign and date PROVENANCE.md** when the first code commit lands. Do not backdate.
+- [ ] **If the drafted IP assignment is later executed**, carve this project out or record the
+      Apache-2.0 licence as an existing encumbrance in its schedule, or the schedule will be wrong.
 - [ ] **Configure `.internal-patterns`** locally (gitignored) and set the `INTERNAL_PATTERNS`
       repository secret in GitHub, listing internal service names, hostnames, and infrastructure
       identifiers. Without it `scripts/check-leaks.sh` runs structural checks only. The list must
       never be committed — this repo becomes public.
-- [ ] **Strip the private-side coupling.** `internal/fleet` is entirely queue/storage integration
-      with the private platform; leave it behind. Roughly 50 references to internal services span
-      nearly every file of the source engine, including `engine.go` and `registry.go`.
-- [ ] **Add `NOTICE` entries** for anything vendored during the import.
+- [ ] **Keep platform coupling out by construction.** Job-queue pull workers, storage and dispatch
+      integration, and anything else specific to the private platform must never be written here —
+      not in code and not in history. This is the reason for the rewrite.
+- [ ] **Decide the assignment sequencing.** The drafted IP assignment auto-assigns future works
+      that relate to or improve upon the assigned property. Either write this project before that
+      assignment is executed, or carve it out explicitly. See
+      [PROVENANCE.md](PROVENANCE.md#sequencing-the-future-works-clause).
+- [ ] **Add `NOTICE` entries** for anything vendored.
 
 ## Before accepting outside contributions
 

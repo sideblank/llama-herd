@@ -62,21 +62,31 @@ Not published yet. See Status.
 
 ## Status
 
-**Early.** This repo is the open-source extraction of a runtime that has been running privately;
-the code import is still in progress. What has been proven on the parent engine, on a single 3090:
+**Early — the code is being written now.** llama-herd is a clean rewrite, not a port: no code is
+carried over from anywhere, down to the llama.cpp binding.
+
+It is also **not a stripped-down edition of a private product.** llama-herd has features its
+closed-source predecessor does not, and leaves out that system's platform-specific plumbing
+entirely. The two diverge in both directions.
+
+The architecture above is not speculative. The author built a runtime of this design privately and
+measured it on a single 3090:
 
 - 4 models co-resident on one card — 22 streams total, 11.2 GB of 24 GB, all four decoding
   simultaneously with zero cross-stream contamination
 - ~318 tok/s aggregate decode driving 6 streams of an 8B-class model at Q4 through one context
 - 128k chunked prefill; input ceiling is the per-sequence context, not the batch size
 
-Those numbers came off the private tree and are recorded here as the bar to reproduce in the open
-one — not as a claim about this repo's current contents. Treat them as provenance, not a benchmark
-result, until the import lands and CI can regenerate them.
+Those numbers came from a **different implementation** of this architecture. They are recorded as
+the bar this rewrite aims to reproduce — not as a claim about this repo's code, which does not yet
+exist. Treat them as a design target, not a benchmark result, until CI can regenerate them here.
+
+See [PROVENANCE.md](PROVENANCE.md) for what does and does not carry over.
 
 ## Building
 
-Requires a CUDA build of llama.cpp and a Go toolchain. Build instructions land with the import.
+Requires a CUDA build of llama.cpp and a Go toolchain. Build instructions land with the first
+code drop.
 
 ## License
 
