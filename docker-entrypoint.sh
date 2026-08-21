@@ -12,6 +12,13 @@
 #   LLAMA_HERD_BATCH         tokens per decode pass               (default: 2048)
 #   LLAMA_HERD_GPU_LAYERS    -1 offloads everything               (default: -1)
 #   LLAMA_HERD_LOAD_MTP      load multi-token-prediction layers   (default: false)
+#   LLAMA_HERD_KV_TYPE_K     key cache precision                  (default: f16)
+#   LLAMA_HERD_KV_TYPE_V     value cache precision                (default: f16)
+#   LLAMA_HERD_FLASH_ATTN    flash attention, required by any quantized KV (default: false)
+#   LLAMA_HERD_MMPROJ_URL    multimodal projector, for vision models
+#
+# Quantized KV is what makes long context fit — f16 costs twice q8 per token — but it does
+# not work without flash attention, so the two are set together or not at all.
 set -euo pipefail
 
 MANIFEST=${LLAMA_HERD_MANIFEST:-/etc/llama-herd/manifest.json}
@@ -44,6 +51,20 @@ if [ ! -f "$MANIFEST" ]; then
     echo "entrypoint: reusing cached $model_file"
   fi
 
+  # A vision model needs its projector fetched too; without it the weights are text-only.
+  MMPROJ_JSON=""
+  if [ -n "${LLAMA_HERD_MMPROJ_URL:-}" ]; then
+    mmproj_file="/models/$(basename "${LLAMA_HERD_MMPROJ_URL%%\?*}")"
+    if [ ! -f "$mmproj_file" ]; then
+      echo "entrypoint: fetching projector $LLAMA_HERD_MMPROJ_URL"
+      curl -fL --retry 3 --retry-delay 5 -o "${mmproj_file}.partial" "$LLAMA_HERD_MMPROJ_URL"
+      mv "${mmproj_file}.partial" "$mmproj_file"
+    fi
+    MMPROJ_JSON=",
+      \"mmproj_path\": \"$mmproj_file\",
+      \"vision_gpu\": true"
+  fi
+
   cat > "$MANIFEST" <<JSON
 {
   "listen": ":8080",
@@ -55,7 +76,10 @@ if [ ! -f "$MANIFEST" ]; then
       "context": ${LLAMA_HERD_CONTEXT:-8192},
       "batch": ${LLAMA_HERD_BATCH:-2048},
       "streams": ${LLAMA_HERD_STREAMS:-4},
-      "load_mtp": ${LLAMA_HERD_LOAD_MTP:-false}
+      "load_mtp": ${LLAMA_HERD_LOAD_MTP:-false},
+      "kv_type_k": "${LLAMA_HERD_KV_TYPE_K:-f16}",
+      "kv_type_v": "${LLAMA_HERD_KV_TYPE_V:-f16}",
+      "flash_attention": ${LLAMA_HERD_FLASH_ATTN:-false}${MMPROJ_JSON}
     }
   ]
 }
