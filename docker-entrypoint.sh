@@ -8,6 +8,10 @@
 #   LLAMA_HERD_MODEL_URL     GGUF to download (required unless a manifest is mounted)
 #   LLAMA_HERD_MODEL_NAME    name requests address it by          (default: chat)
 #   LLAMA_HERD_CONTEXT       total context across streams         (default: 8192)
+#   LLAMA_HERD_ADMIT_CONTEXT what one request may occupy, below the per-stream share.
+#                            The gap is slack no caller can consume: it keeps a stream from
+#                            reaching the end of its window, and is spendable on the
+#                            deployment's own tokens.
 #   LLAMA_HERD_STREAMS       concurrent generations               (default: 4)
 #   LLAMA_HERD_BATCH         tokens per decode pass               (default: 2048)
 #   LLAMA_HERD_GPU_LAYERS    -1 offloads everything               (default: -1)
@@ -101,6 +105,12 @@ if [ ! -f "$MANIFEST" ]; then
       }"
   fi
 
+  ADMIT_JSON=""
+  if [ -n "${LLAMA_HERD_ADMIT_CONTEXT:-}" ]; then
+    ADMIT_JSON="
+      \"admit_context\": ${LLAMA_HERD_ADMIT_CONTEXT},"
+  fi
+
   cat > "$MANIFEST" <<JSON
 {
   "listen": ":8080",
@@ -109,7 +119,7 @@ if [ ! -f "$MANIFEST" ]; then
       "name": "${LLAMA_HERD_MODEL_NAME:-chat}",
       "path": "$model_file",
       "gpu_layers": ${LLAMA_HERD_GPU_LAYERS:--1},
-      "context": ${LLAMA_HERD_CONTEXT:-8192},
+      "context": ${LLAMA_HERD_CONTEXT:-8192},${ADMIT_JSON}
       "batch": ${LLAMA_HERD_BATCH:-2048},
       "streams": ${LLAMA_HERD_STREAMS:-4},
       "load_mtp": ${LLAMA_HERD_LOAD_MTP:-false},
