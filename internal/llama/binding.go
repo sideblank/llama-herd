@@ -376,6 +376,61 @@ func (ctx *Context) SeqRm(seq SeqID, p0, p1 Pos) bool {
 	return bool(C.llama_memory_seq_rm(ctx.mem, C.llama_seq_id(seq), C.llama_pos(p0), C.llama_pos(p1)))
 }
 
+// SeqRmSupport describes how much of a sequence this context can remove.
+type SeqRmSupport int
+
+const (
+	// SeqRmNone means the context has no memory module to remove from.
+	SeqRmNone SeqRmSupport = iota
+	// SeqRmPartial means any tail of a sequence can be removed. Speculation needs this:
+	// rejected drafts are written into the cache to be checked and must then be taken back.
+	SeqRmPartial
+	// SeqRmWholeOnly means only an entire sequence can be dropped. Architectures carrying
+	// recurrent state cannot rewind it, so a partial removal silently does nothing.
+	SeqRmWholeOnly
+)
+
+func (s SeqRmSupport) String() string {
+	switch s {
+	case SeqRmPartial:
+		return "partial"
+	case SeqRmWholeOnly:
+		return "whole-sequence-only"
+	default:
+		return "none"
+	}
+}
+
+// CanSeqRm reports whether this context can take back part of a sequence.
+//
+// There is no flag to read, so this is measured the way upstream measures it: decode two
+// tokens and try to remove the second. The answer decides whether speculation is usable at
+// all, because a rejected draft has to be removed from the cache after being written there.
+//
+// It clears the context's memory, so it must run before anything is served.
+func (ctx *Context) CanSeqRm() SeqRmSupport {
+	if ctx.mem == nil {
+		return SeqRmNone
+	}
+	C.llama_memory_clear(ctx.mem, C.bool(true))
+	defer C.llama_memory_clear(ctx.mem, C.bool(true))
+
+	b := NewBatch(2, 1)
+	defer b.Free()
+	for i := 0; i < 2; i++ {
+		if err := b.Add(0, Pos(i), []SeqID{0}, i == 1); err != nil {
+			return SeqRmNone
+		}
+	}
+	if err := ctx.Decode(b); err != nil {
+		return SeqRmNone
+	}
+	if !ctx.SeqRm(0, 1, -1) {
+		return SeqRmWholeOnly
+	}
+	return SeqRmPartial
+}
+
 // ---------------------------------------------------------------- vocab
 
 // Vocab is a model's token vocabulary. It is owned by the Model.

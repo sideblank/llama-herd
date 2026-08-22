@@ -234,6 +234,17 @@ int32_t lhspec_draft(void *spec, int32_t seq_id, int32_t n_past, int32_t id_last
         auto &result = h->results[(size_t) seq_id];
         result.clear();
 
+        // The draft cache must hold nothing at or above the position being drafted from.
+        // The previous round wrote a draft region that reached further than the target
+        // ended up accepting, and process() then refilled the whole batch, so without this
+        // the cache sits ahead of the request by however many drafts were rejected. The
+        // backend reports that as inconsistent sequence positions, which names neither
+        // speculation nor the round that caused it.
+        if (auto *ctx_dft = h->init ? h->init->context() : nullptr) {
+            llama_memory_seq_rm(llama_get_memory(ctx_dft), (llama_seq_id) seq_id,
+                                (llama_pos) n_past, -1);
+        }
+
         auto &dp = common_speculative_get_draft_params(h->spec.get(), (llama_seq_id) seq_id);
         dp.drafting = true;
         dp.n_past   = (llama_pos) n_past;

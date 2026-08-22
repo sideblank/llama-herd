@@ -394,9 +394,18 @@ func (r *Runner) SetSampling(seq engine.SeqID, p *engine.SamplingParams) error {
 
 // TrimSeq drops a sequence's cells from a position onward, keeping the prefix. Used to
 // discard rejected speculative tokens without disturbing what was accepted.
-func (r *Runner) TrimSeq(seq engine.SeqID, from engine.Pos) {
-	r.ctx.SeqRm(SeqID(seq), Pos(from), -1)
+// TrimSeq takes back the tail of a sequence from `from` onward.
+//
+// The result is not decoration: on an architecture that cannot rewind, the removal does
+// nothing and reports so. Discarding that leaves the engine believing it rewound while the
+// cache still holds the rejected tokens, and the next batch is rejected for inconsistent
+// positions — a failure that names neither the rewind nor the speculation that needed it.
+func (r *Runner) TrimSeq(seq engine.SeqID, from engine.Pos) bool {
+	return r.ctx.SeqRm(SeqID(seq), Pos(from), -1)
 }
+
+// CanSeqRm reports how much of a sequence this runner can take back.
+func (r *Runner) CanSeqRm() SeqRmSupport { return r.ctx.CanSeqRm() }
 
 // FreeSeq drops the sequence's KV cells and clears its sampler.
 //

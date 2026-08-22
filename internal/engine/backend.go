@@ -195,7 +195,14 @@ type Backend interface {
 	// Speculation needs this: drafted tokens are written into the cache to be verified,
 	// and the rejected tail must be removed or the sequence continues from a state the
 	// model never actually chose.
-	TrimSeq(seq SeqID, from Pos)
+	// TrimSeq removes a sequence's cache from `from` onward, reporting whether it could.
+	//
+	// It returns false on architectures that cannot rewind — those carrying recurrent
+	// state, where only a whole sequence can be dropped. Speculation depends on this
+	// working, because a rejected draft is written into the cache to be checked and must
+	// then be taken back. Ignoring the result leaves the cache and the engine's idea of
+	// position disagreeing, which surfaces later as a rejected batch.
+	TrimSeq(seq SeqID, from Pos) bool
 
 	// FreeSeq drops a sequence's KV cells, returning its capacity to the pool.
 	FreeSeq(seq SeqID)

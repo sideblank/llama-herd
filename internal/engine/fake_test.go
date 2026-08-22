@@ -38,6 +38,8 @@ type fakeBackend struct {
 	freed map[SeqID]int
 	// trims records TrimSeq calls.
 	trims []trim
+	// trimRefused makes TrimSeq report that it could not rewind.
+	trimRefused bool
 	// sampling records the last params installed per sequence.
 	sampling map[SeqID]*SamplingParams
 	// samplingCalls counts SetSampling calls per sequence.
@@ -169,10 +171,13 @@ func (f *fakeBackend) SetSampling(seq SeqID, p *SamplingParams) error {
 }
 
 // trimmed records TrimSeq calls so tests can assert rejected drafts are rolled back.
-func (f *fakeBackend) TrimSeq(seq SeqID, from Pos) {
+func (f *fakeBackend) TrimSeq(seq SeqID, from Pos) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.trims = append(f.trims, trim{seq, from})
+	// canTrim mirrors an architecture that cannot rewind when set false, so the engine's
+	// handling of a refused rollback is testable without such a model.
+	return !f.trimRefused
 }
 
 func (f *fakeBackend) FreeSeq(seq SeqID) {

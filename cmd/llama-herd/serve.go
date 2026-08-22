@@ -160,7 +160,26 @@ func serve(args []string) int {
 		}
 
 		ecfg := engine.Config{MaxQueue: mm.MaxQueue}
-		if sp := mm.Speculation; sp != nil && sp.Type == "mtp" {
+
+		// Speculation writes drafts into the cache to be checked and takes back whatever
+		// the target rejected. An architecture carrying recurrent state cannot rewind, so
+		// the removal silently does nothing and the next batch is refused for inconsistent
+		// positions — which kills the model for every stream, not just the request that
+		// speculated. Hybrid attention is exactly such an architecture, and it is what the
+		// long-context models here use.
+		//
+		// This is measured rather than inferred, and measured before anything is served.
+		canRewind := true
+		if sp := mm.Speculation; sp != nil && sp.Type != "" && sp.Type != "none" {
+			if support := r.CanSeqRm(); support != llama.SeqRmPartial {
+				canRewind = false
+				log.Printf("  %s speculation: disabled — this model's cache supports %s "+
+					"removal, and speculation needs to take back rejected drafts. "+
+					"Serving without it.", mm.Name, support)
+			}
+		}
+
+		if sp := mm.Speculation; sp != nil && sp.Type == "mtp" && canRewind {
 			// A model whose head was stripped in quantization cannot draft. That is a
 			// configuration mistake worth naming rather than a reason to refuse service,
 			// so it degrades to ordinary decoding and says so.
@@ -174,7 +193,7 @@ func serve(args []string) int {
 				log.Printf("  %s speculation: mtp, up to %d tokens", mm.Name, spec.MaxDraft())
 			}
 		}
-		if sp := mm.Speculation; sp != nil && sp.Type == "lookup" {
+		if sp := mm.Speculation; sp != nil && sp.Type == "lookup" && canRewind {
 			lk := draft.NewLookup(sp.MaxDraft)
 			if sp.Pattern > 0 {
 				lk.N = sp.Pattern

@@ -86,6 +86,8 @@ type slot struct {
 	media     [][]byte
 	prompt    string
 	prefilled bool
+	// seeded records that the drafter has been given this slot's prompt.
+	seeded bool
 	// seedPrompt is the prompt kept for the drafter, which is seeded when prefill finishes
 	// rather than at admission: pending is consumed during prefill and would be empty by
 	// then.
@@ -120,6 +122,9 @@ type Engine struct {
 	// outputEverywhere is set when the drafter reads the target's hidden states, which only
 	// exist at positions where output was requested.
 	outputEverywhere bool
+	// speculationUnusable records that a rollback was refused, so the reason is reported
+	// once rather than on every request that would have speculated.
+	speculationUnusable bool
 
 	closed bool
 
@@ -316,12 +321,14 @@ func (e *Engine) admit(active map[SeqID]*slot) {
 
 		s.seq = seq
 		s.sampledOnce = false
+		s.seeded = false
 		active[seq] = s
 		e.c.active.Add(1)
 
-		// The drafter is seeded when prefill completes, not here. A drafter that reads
-		// the target's hidden states needs the prompt already evaluated: seeded at
-		// admission it finds an empty cache, and from then on it drafts from nothing.
+		// The prompt is kept for the drafter, which is seeded once this slot's prompt has
+		// been through a forward pass. Seeding at admission hands a drafter that reads the
+		// target's state an empty cache, and it drafts from nothing thereafter. pending is
+		// consumed during prefill, so it has to be copied now.
 		s.seedPrompt = append(s.seedPrompt[:0], s.pending...)
 	}
 }
@@ -454,11 +461,8 @@ func (e *Engine) tick(active map[SeqID]*slot) error {
 				// token — injecting it into the sequence ahead of the real first token.
 				// The model then continues from a prompt it was never given.
 				s.specIdx = append(s.specIdx[:0], idx)
-				// The prompt is now evaluated, so a drafter that reads from it has
-				// something to read. Seeding earlier hands it an empty cache.
-				if sd, ok := e.drafter.(Seeder); ok && sd != nil {
-					sd.Seed(s.seq, s.seedPrompt)
-				}
+				// Seeding happens after this batch is decoded and observed, not here:
+				// staging the prompt is not the same as having evaluated it.
 			}
 		}
 	}
@@ -509,6 +513,17 @@ func (e *Engine) harvest(active map[SeqID]*slot) error {
 			continue
 		}
 
+		// Seed the drafter once the prompt has actually been through a forward pass and
+		// the drafter has observed it. Seeding while the prompt is merely staged hands a
+		// state-reading drafter an empty cache, which upstream reports as drafts that "may
+		// degrade" rather than as an error — and they degrade to nothing at all.
+		if s.primed && !s.seeded {
+			if sd, ok := e.drafter.(Seeder); ok && sd != nil {
+				sd.Seed(s.seq, s.seedPrompt)
+			}
+			s.seeded = true
+		}
+
 		if !s.sampledOnce {
 			// Install per-request sampling on the decode-loop goroutine, which is the
 			// only one permitted to touch the backend.
@@ -534,7 +549,24 @@ func (e *Engine) harvest(active map[SeqID]*slot) error {
 		kept := accepted + 1
 		if kept < len(s.specIdx) {
 			s.pos -= Pos(len(s.specIdx) - kept)
-			e.be.TrimSeq(s.seq, s.pos)
+			if !e.be.TrimSeq(s.seq, s.pos) {
+				// The cache still holds tokens the target rejected, and there is no way
+				// to take them back on this architecture. Continuing would submit a batch
+				// the backend refuses for inconsistent positions, killing the model for
+				// every stream rather than this one request.
+				//
+				// Speculation is an optimisation, so it is dropped rather than the
+				// service. The sequence's own state is already inconsistent, so it ends.
+				e.speculationUnusable = true
+				e.drafter = nil
+				log.Printf("engine: this model cannot take back rejected drafts " +
+					"(partial cache removal unsupported, which is normal for recurrent " +
+					"and hybrid architectures) — speculation disabled for the rest of " +
+					"this process")
+				e.finish(active, seq, "", errors.New(
+					"speculation rolled back on a model that cannot rewind its cache"))
+				continue
+			}
 		}
 		if e.drafter != nil && len(s.draft) > 0 {
 			e.c.acceptedD.Add(uint64(accepted))
