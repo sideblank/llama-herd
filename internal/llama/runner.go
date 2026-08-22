@@ -5,6 +5,7 @@ package llama
 
 import (
 	"fmt"
+	"log"
 
 	"github.com/sideblank/llama-herd/internal/bench"
 	"github.com/sideblank/llama-herd/internal/engine"
@@ -31,6 +32,8 @@ type Runner struct {
 	// thinkPrime opens and closes a reasoning block, suppressing it. Empty when the model
 	// has no such block, in which case nothing is ever appended.
 	thinkPrime string
+	// ckptLogged keeps the snapshot-size report to once per process.
+	ckptLogged bool
 
 	nVocab int32
 	eos    Token
@@ -429,11 +432,26 @@ func (r *Runner) CanSeqRm() SeqRmSupport { return r.ctx.CanSeqRm() }
 // Only the partial state is copied — the recurrent and sliding-window caches. The attention
 // cache is far larger and is rewound by trimming instead, so copying it here would make a
 // per-step snapshot cost more than the speculation it enables.
+// checkpointFlags keep the snapshot in device memory.
+//
+// Without OnDevice every checkpoint copies state to host and every rollback copies it back —
+// twice across the bus per decode step, per sequence, for state that never leaves the card
+// otherwise. Speculation takes a checkpoint on every step it drafts, so that traffic is paid
+// continuously rather than occasionally.
+//
+// One snapshot per sequence may be live at a time under this flag, which is exactly how it
+// is used: taken before a step, consumed by that step's rollback.
+const checkpointFlags = StateSeqPartialOnly | StateSeqOnDevice
+
 func (r *Runner) Checkpoint(seq engine.SeqID) error {
 	if int(seq) < 0 || int(seq) >= len(r.ckpt) {
 		return fmt.Errorf("llama: sequence %d out of range for checkpointing", seq)
 	}
-	n := r.ctx.SeqStateSize(SeqID(seq), StateSeqPartialOnly)
+	n := r.ctx.SeqStateSize(SeqID(seq), checkpointFlags)
+	if !r.ckptLogged {
+		r.ckptLogged = true
+		log.Printf("engine: speculative checkpoint is %d bytes per step per sequence", n)
+	}
 	if n == 0 {
 		// Nothing that needs carrying back. Recording an empty checkpoint keeps Rollback
 		// honest about whether one was ever taken.
@@ -444,7 +462,7 @@ func (r *Runner) Checkpoint(seq engine.SeqID) error {
 		r.ckpt[seq] = make([]byte, n)
 	}
 	r.ckpt[seq] = r.ckpt[seq][:n]
-	if got := r.ctx.SeqStateSave(SeqID(seq), r.ckpt[seq], StateSeqPartialOnly); got == 0 {
+	if got := r.ctx.SeqStateSave(SeqID(seq), r.ckpt[seq], checkpointFlags); got == 0 {
 		r.ckpt[seq] = r.ckpt[seq][:0]
 		return fmt.Errorf("llama: could not snapshot sequence %d (%d bytes expected)", seq, n)
 	}
@@ -461,7 +479,7 @@ func (r *Runner) Rollback(seq engine.SeqID, to engine.Pos) error {
 		return fmt.Errorf("llama: sequence %d out of range for rollback", seq)
 	}
 	if buf := r.ckpt[seq]; len(buf) > 0 {
-		if got := r.ctx.SeqStateLoad(SeqID(seq), buf, StateSeqPartialOnly); got == 0 {
+		if got := r.ctx.SeqStateLoad(SeqID(seq), buf, checkpointFlags); got == 0 {
 			return fmt.Errorf("llama: sequence %d rejected its checkpoint", seq)
 		}
 	}
