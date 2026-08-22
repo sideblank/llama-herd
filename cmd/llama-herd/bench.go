@@ -260,6 +260,8 @@ func remoteBench(args []string) int {
 	workload := fs.String("workload", "", "named workload shaped like real traffic")
 	// Some hosts authenticate with their own header rather than a bearer token.
 	hdr := fs.String("header", "", "extra header, as Name:Value; repeat with commas")
+	verify := fs.Bool("verify-speculation", false,
+		"ask the same prompt with and without drafting and report whether the answers match")
 	jsonPath := fs.String("json", "", "write the machine-readable report here")
 	mdPath := fs.String("markdown", "", "write the publishable report here")
 	if err := fs.Parse(args); err != nil {
@@ -294,6 +296,29 @@ func remoteBench(args []string) int {
 		}
 	}
 	r := bench.NewRemote(*url, *key, *model, headers)
+
+	if *verify {
+		res, err := r.VerifySpeculation(ctx, *prompt, *tokens)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "bench:", err)
+			return 1
+		}
+		if res.Identical {
+			fmt.Printf("speculation is output-neutral: %d bytes, identical with and without\n",
+				len(res.WithSpeculation))
+			return 0
+		}
+		fmt.Fprintf(os.Stderr,
+			"SPECULATION CHANGED THE OUTPUT — the answers part at byte %d.\n\n"+
+				"  with    : %q\n  without : %q\n\n"+
+				"Speculation is an optimisation: the token at a divergence is the target's own\n"+
+				"choice, so the text must be identical. A difference means the caches disagree,\n"+
+				"and no counter shows it — acceptance and tokens-per-pass look healthy either way.\n",
+			res.FirstDifference,
+			excerpt(res.WithSpeculation, res.FirstDifference),
+			excerpt(res.WithoutSpeculation, res.FirstDifference))
+		return 1
+	}
 
 	c, err := r.Counters(ctx)
 	if err != nil {
@@ -348,4 +373,13 @@ func remoteBench(args []string) int {
 		}
 	}
 	return 0
+}
+
+// excerpt shows the text around a divergence, so the difference is legible without printing
+// two whole answers.
+func excerpt(s string, at int) string {
+	const around = 60
+	lo := max(0, at-around)
+	hi := min(len(s), at+around)
+	return s[lo:hi]
 }

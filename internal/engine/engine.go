@@ -25,6 +25,14 @@ type Request struct {
 	// Media carries encoded images or audio. Requires a backend implementing
 	// MediaBackend, and the prompt must contain that backend's marker once per item.
 	Media [][]byte
+	// Speculate turns drafting off for this request when set to false. Nil follows the
+	// model's configuration.
+	//
+	// It exists so that one server can answer the same prompt with and without
+	// speculation. That comparison is the only way to show speculation changed nothing,
+	// and requiring two deployments to make it put it out of reach exactly where it
+	// matters most — against a real model on real hardware.
+	Speculate *bool
 }
 
 // Event is one item in a stream's output.
@@ -88,6 +96,8 @@ type slot struct {
 	prefilled bool
 	// seeded records that the drafter has been given this slot's prompt.
 	seeded bool
+	// noSpeculate suppresses drafting for this request alone.
+	noSpeculate bool
 	// committed holds the tokens staged this step, real token first, then the drafts. On a
 	// rollback the accepted prefix of this is what must be replayed.
 	committed []Token
@@ -226,10 +236,12 @@ func (e *Engine) Submit(ctx context.Context, req Request) (*Stream, error) {
 		sampling:  req.Sampling,
 		media:     req.Media,
 		prompt:    req.Prompt,
-		out:       make(chan Event, 32),
-		ctx:       cctx,
-		cancel:    cancel,
-		batchIdx:  -1,
+		// Absent means follow the model's configuration; only an explicit false disables.
+		noSpeculate: req.Speculate != nil && !*req.Speculate,
+		out:         make(chan Event, 32),
+		ctx:         cctx,
+		cancel:      cancel,
+		batchIdx:    -1,
 	}
 
 	e.mu.Lock()
@@ -471,7 +483,7 @@ func (e *Engine) tick(active map[SeqID]*slot) error {
 		s.specIdx = append(s.specIdx, idx)
 		s.pos++
 
-		if e.drafter == nil {
+		if e.drafter == nil || s.noSpeculate {
 			continue
 		}
 		room := int(budget - e.be.BatchLen())

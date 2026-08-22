@@ -574,3 +574,39 @@ func (r *recordingRewinder) DropCheckpoint(seq SeqID) {
 	delete(r.checkpointed, seq)
 	r.ops = append(r.ops, rewOp{"drop", seq})
 }
+
+// A request may opt out of speculation without the model being reconfigured. This is what
+// makes the output-neutrality check possible against a single running server: the same
+// prompt, answered twice, one with drafting and one without.
+func TestRequestCanDisableSpeculation(t *testing.T) {
+	f := newFake(1, 32)
+	// Long enough for both requests: the stand-in emits EOS once its script runs out, and
+	// a request that ends immediately never reaches the point of drafting.
+	f.script[0] = []Token{'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'}
+	d := &scriptedDrafter{propose: []Token{'a'}, max: 1}
+
+	e := New(f, Config{Drafter: d})
+	defer run(t, e)()
+
+	off := false
+	s, err := e.Submit(context.Background(), Request{Prompt: "hi", MaxTokens: 2, Speculate: &off})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, s)
+
+	if got := e.Stats().DraftsProposed; got != 0 {
+		t.Fatalf("%d drafts proposed for a request that opted out", got)
+	}
+
+	// The same engine still speculates for a request that did not opt out, so the switch is
+	// per-request rather than a way to disable the feature by accident.
+	s2, err := e.Submit(context.Background(), Request{Prompt: "hi", MaxTokens: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, s2)
+	if got := e.Stats().DraftsProposed; got == 0 {
+		t.Fatal("no drafts proposed for a request that did not opt out")
+	}
+}

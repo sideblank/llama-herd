@@ -310,3 +310,95 @@ func RunRemote(ctx context.Context, r *Remote, cfg Config) (*Result, error) {
 	res.TTFTMax = percentile(ttfts, 1.0)
 	return res, nil
 }
+
+// VerifySpeculation asks the same prompt twice — once with drafting and once without — and
+// reports whether the answers match.
+//
+// This is the check that speculation is an optimisation and nothing more. It is worth having
+// as a command because no counter shows it: acceptance, tokens-per-pass and a clean error log
+// all look healthy when the caches disagree and the text quietly degrades.
+//
+// It runs the two requests sequentially at one stream on purpose. Continuous batching
+// interleaves concurrent requests differently on every run, and that alone changes batch
+// composition enough to flip a near-tied token — so a difference measured under concurrency
+// says nothing about speculation. Sequential single-stream is the only arrangement where the
+// comparison has a stable control.
+func (r *Remote) VerifySpeculation(ctx context.Context, prompt string, maxTokens int) (VerifyResult, error) {
+	var out VerifyResult
+	off := false
+
+	withSpec, err := r.completeOnce(ctx, prompt, maxTokens, nil)
+	if err != nil {
+		return out, fmt.Errorf("with speculation: %w", err)
+	}
+	withoutSpec, err := r.completeOnce(ctx, prompt, maxTokens, &off)
+	if err != nil {
+		return out, fmt.Errorf("without speculation: %w", err)
+	}
+
+	out.WithSpeculation = withSpec
+	out.WithoutSpeculation = withoutSpec
+	out.Identical = withSpec == withoutSpec
+	if !out.Identical {
+		out.FirstDifference = -1
+		for i := 0; i < len(withSpec) && i < len(withoutSpec); i++ {
+			if withSpec[i] != withoutSpec[i] {
+				out.FirstDifference = i
+				break
+			}
+		}
+		if out.FirstDifference < 0 {
+			// One is a prefix of the other, so they part where the shorter ends.
+			out.FirstDifference = min(len(withSpec), len(withoutSpec))
+		}
+	}
+	return out, nil
+}
+
+// VerifyResult is the outcome of a speculation-neutrality check.
+type VerifyResult struct {
+	WithSpeculation    string `json:"with_speculation"`
+	WithoutSpeculation string `json:"without_speculation"`
+	Identical          bool   `json:"identical"`
+	// FirstDifference is the byte offset where the answers part, or 0 when identical.
+	FirstDifference int `json:"first_difference"`
+}
+
+func (r *Remote) completeOnce(ctx context.Context, prompt string, maxTokens int, speculate *bool) (string, error) {
+	body := map[string]any{
+		"model":    r.Model,
+		"messages": []map[string]string{{"role": "user", "content": prompt}},
+		// Greedy, so the only thing that can move the answer is the engine.
+		"temperature": 0,
+		"max_tokens":  maxTokens,
+	}
+	if speculate != nil {
+		body["speculate"] = *speculate
+	}
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return "", err
+	}
+	resp, err := r.do(ctx, http.MethodPost, "/v1/chat/completions", buf)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("status %d", resp.StatusCode)
+	}
+	var out struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	if len(out.Choices) == 0 {
+		return "", fmt.Errorf("no choices returned")
+	}
+	return out.Choices[0].Message.Content, nil
+}

@@ -25,6 +25,15 @@ type ChatRequest struct {
 	// Stop accepts either a string or an array, which is why it is decoded loosely.
 	Stop stopValue `json:"stop,omitempty"`
 
+	// Speculate turns drafting off for this request when explicitly false. Omitting it
+	// follows the model's configuration.
+	//
+	// This exists to make one check possible against a running server: the same prompt,
+	// answered with speculation and without, must produce the same text. Speculation is an
+	// optimisation, so any difference is a defect — and no counter reveals it, since
+	// acceptance and tokens-per-pass look healthy either way.
+	Speculate *bool `json:"speculate,omitempty"`
+
 	// Sampling controls. Pointers so an explicit zero is distinguishable from absence:
 	// "temperature": 0 asks for greedy decoding, which is not the same as omitting it.
 	Temperature      *float32 `json:"temperature,omitempty"`

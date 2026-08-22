@@ -342,6 +342,7 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		Stop:      req.Stop,
 		Sampling:  req.sampling(),
 		Media:     media,
+		Speculate: req.Speculate,
 	})
 	if err != nil {
 		status := http.StatusBadRequest
