@@ -30,9 +30,20 @@ type Selftest struct {
 	AggregateTokPerSec float64 `json:"aggregate_tok_per_sec"`
 	// PerStreamTokPerSec is the aggregate divided by the stream count — what one caller sees.
 	PerStreamTokPerSec float64 `json:"per_stream_tok_per_sec"`
-	// TokensPerPass is how many tokens each forward pass carried. Near the stream count means
-	// the herd is batching; near one means it is not, whatever the aggregate says.
+	// TokensPerPass is how many tokens were in each batch handed to the library.
+	//
+	// It does NOT say the herd amortised. It counts what was submitted, not what the library
+	// did with it — a library that splits the batch into one pass per sequence leaves this
+	// reading a healthy near-stream-count while every stream costs a full pass. Read
+	// SingleStreamTokPerSec against the aggregate for that.
 	TokensPerPass float64 `json:"tokens_per_pass"`
+	// SingleStreamTokPerSec is the same measurement with one stream, which is the reference
+	// the aggregate has to beat. A herd no faster than one of its members is not sharing the
+	// weight reads, whatever else looks right.
+	SingleStreamTokPerSec float64 `json:"single_stream_tok_per_sec,omitempty"`
+	// Amortisation is aggregate over single-stream. Above one means concurrency is buying
+	// something; at or below one it is costing.
+	Amortisation float64 `json:"amortisation,omitempty"`
 	// PromptTokPerSec is prefill, reported separately because blending it into a decode rate
 	// is how a throughput figure becomes uncheckable.
 	PromptTokPerSec float64 `json:"prompt_tok_per_sec,omitempty"`
@@ -104,16 +115,30 @@ func RunSelftest(ctx context.Context, eng *engine.Engine, streams int, genTokens
 	if res.Library != nil {
 		st.PromptTokPerSec = res.Library.PromptTokPerSec
 	}
-	st.TookSeconds = time.Since(start).Seconds()
-
-	// The failure worth naming: the herd formed and bought nothing. Aggregate throughput can
-	// look reasonable while every extra stream costs a full pass, and no serving metric shows
-	// it — only tokens per pass against the stream count does.
-	if streams > 1 && res.TokensPerPass > 0 && res.TokensPerPass < float64(streams)*0.75 {
-		st.Note = fmt.Sprintf("only %.2f tokens per pass across %d streams — "+
-			"the herd is not batching, so concurrency is costing passes rather than sharing them",
-			res.TokensPerPass, streams)
+	// The failure worth naming: the herd formed and bought nothing.
+	//
+	// Measured by running one stream as well and comparing, because that is the only reading
+	// that shows it. Tokens-per-pass counts the batch submitted, so it stays healthy while
+	// the library runs one pass per sequence underneath — which is exactly how this went
+	// unnoticed until throughput was held against the model's own one-stream rate.
+	if streams > 1 {
+		one, err := Run(ctx, eng, Config{
+			Prompt: selftestPrompt, Streams: 1, Tokens: genTokens, Warmup: 2,
+		})
+		if err == nil && one.DecodeTokPerSec > 0 {
+			st.SingleStreamTokPerSec = one.DecodeTokPerSec
+			st.Amortisation = st.AggregateTokPerSec / one.DecodeTokPerSec
+			if st.Amortisation < 1.0 {
+				st.Note = fmt.Sprintf(
+					"%d streams aggregate %.1f tok/s against %.1f for a single stream — the herd "+
+						"is not amortising, so concurrency is costing passes rather than sharing "+
+						"them. Check kv_unified: one KV pool per stream makes the library run a "+
+						"forward pass per sequence.",
+					streams, st.AggregateTokPerSec, one.DecodeTokPerSec)
+			}
+		}
 	}
+	st.TookSeconds = time.Since(start).Seconds()
 	return st
 }
 

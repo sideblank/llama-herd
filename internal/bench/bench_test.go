@@ -268,3 +268,86 @@ func TestSelftestRespectsItsBudget(t *testing.T) {
 		t.Fatalf("truncated selftest lost its provenance: %+v", st)
 	}
 }
+
+// amortFake serves N streams at a fixed cost per PASS, so concurrency genuinely pays — the
+// arrangement the herd is supposed to produce.
+type amortFake struct {
+	*enginetest.Scripted
+	perPass time.Duration
+}
+
+func (a *amortFake) Decode() error {
+	time.Sleep(a.perPass)
+	return a.Scripted.Decode()
+}
+
+// splitFake charges per TOKEN in the batch instead of per pass — what a library does when it
+// runs one forward pass per sequence. Tokens-per-pass still reads near the stream count,
+// because the batch handed over is unchanged; only the cost differs.
+type splitFake struct {
+	*enginetest.Scripted
+	perToken time.Duration
+	staged   int
+}
+
+func (s *splitFake) BatchClear() { s.staged = 0; s.Scripted.BatchClear() }
+
+func (s *splitFake) BatchAdd(tok engine.Token, pos engine.Pos, seq engine.SeqID, logits bool) error {
+	if err := s.Scripted.BatchAdd(tok, pos, seq, logits); err != nil {
+		return err
+	}
+	s.staged++
+	return nil
+}
+
+func (s *splitFake) Decode() error {
+	time.Sleep(time.Duration(s.staged) * s.perToken)
+	return s.Scripted.Decode()
+}
+
+// The selftest has to catch a herd that forms and amortises nothing. Tokens-per-pass cannot
+// see it — it counts the batch submitted, not what the library did with it — so the check is
+// aggregate throughput against the same engine's single-stream rate.
+func TestSelftestDetectsAHerdThatDoesNotAmortise(t *testing.T) {
+	const streams = 4
+
+	good := &amortFake{Scripted: enginetest.New(streams, 256, "abcdefghijklmnopqrstuvwxyz"),
+		perPass: 4 * time.Millisecond}
+	ge := engine.New(good, engine.Config{})
+	gctx, gcancel := context.WithCancel(context.Background())
+	defer gcancel()
+	go func() { _ = ge.Run(gctx) }()
+	gs := RunSelftest(gctx, ge, streams, 16, "ref", 30*time.Second)
+
+	bad := &splitFake{Scripted: enginetest.New(streams, 256, "abcdefghijklmnopqrstuvwxyz"),
+		perToken: 4 * time.Millisecond}
+	be := engine.New(bad, engine.Config{})
+	bctx, bcancel := context.WithCancel(context.Background())
+	defer bcancel()
+	go func() { _ = be.Run(bctx) }()
+	bs := RunSelftest(bctx, be, streams, 16, "ref", 30*time.Second)
+
+	t.Logf("amortising : aggregate %.1f single %.1f ratio %.2f note=%q",
+		gs.AggregateTokPerSec, gs.SingleStreamTokPerSec, gs.Amortisation, gs.Note)
+	t.Logf("per-sequence: aggregate %.1f single %.1f ratio %.2f note=%q",
+		bs.AggregateTokPerSec, bs.SingleStreamTokPerSec, bs.Amortisation, bs.Note)
+
+	if gs.Amortisation <= 1.0 {
+		t.Errorf("a backend charging per pass should amortise, got ratio %.2f", gs.Amortisation)
+	}
+	if gs.Note != "" {
+		t.Errorf("a healthy herd should not be flagged: %q", gs.Note)
+	}
+	if bs.Amortisation > 1.0 {
+		t.Errorf("a backend charging per token cannot amortise, got ratio %.2f", bs.Amortisation)
+	}
+	if bs.Note == "" {
+		t.Error("a herd that does not amortise must be reported, and tokens-per-pass will not show it")
+	}
+	// The point of the whole test: the metric that looks healthy in both cases.
+	if bs.TokensPerPass < float64(streams)*0.75 {
+		t.Fatalf("this fixture is meant to keep tokens-per-pass healthy (%.2f) while failing "+
+			"to amortise — otherwise it does not prove the old check was insufficient",
+			bs.TokensPerPass)
+	}
+}
