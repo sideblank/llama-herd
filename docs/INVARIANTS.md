@@ -98,6 +98,24 @@ speculation. Reading 1.0 as the baseline reports speculation on every multi-stre
 **A model carrying MTP layers that reads at the baseline is the failure worth catching.** The
 head is loaded, occupying VRAM, and contributing nothing.
 
+**The first token of an answer comes from the prompt's own logits.** Prefill produces logits at
+the last prompt position, and that position must actually be sampled. Recording where they
+landed and never reading it leaves the slot with no token to continue from, and the next pass
+stages whatever the "next token" field holds — the zero value — inserting a token the model
+never produced ahead of the real first one.
+
+**Its symptom depends entirely on the tokenizer, which is why it can survive for a long time.**
+Where token 0 is ordinary text the model absorbs it and returns a plausible answer with a stray
+prefix, and everything reads as working. Where token 0 ends a turn the request returns nothing
+and reports a clean stop, which reads as a broken model or a broken chat template. Both were
+observed on the same build, on qwen2 and qwen35 respectively.
+
+**A stand-in backend must honour the batch index it is given.** Logits exist only where output
+was requested, so sampling a position that produced none reads whatever is in that memory. A
+fake that ignores the index and returns the next scripted token cannot distinguish a correct
+caller from one reading the wrong row — which is exactly how a defect affecting every response
+passed a green test suite.
+
 ## Speculation
 
 **Measure acceptance directly; do not infer it from tokens per pass.** A forward pass can
