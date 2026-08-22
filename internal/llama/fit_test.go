@@ -77,3 +77,40 @@ func TestNoHeadMeansNoCharge(t *testing.T) {
 		t.Fatalf("MTPPerToken = %v with no declared layers, want 0", got)
 	}
 }
+
+// Every figure derived from a fit must charge the draft context the same way. A headline
+// table that includes it and a plan that does not will disagree about the same target, and a
+// reader has no way to tell which one to believe.
+func TestSpeculationChargeReachesEveryDerivedFigure(t *testing.T) {
+	base := FitInput{
+		Shape:       qwenLike(),
+		WeightBytes: 12 << 30,
+		VRAMBytes:   24 << 30,
+		MTPLayers:   1,
+	}
+	spec := base
+	spec.Speculate = true
+
+	// Deliberately past what the card holds, so both are short and the shortfall itself is
+	// comparable. At a target that fits either way the charge is real but invisible, which
+	// would make this assert nothing.
+	const streams, perStream = 4, 512 * 1024
+
+	plainPlan := PlanFor(base, KVq8, streams, perStream)
+	specPlan := PlanFor(spec, KVq8, streams, perStream)
+	if plainPlan.Fits || specPlan.Fits {
+		t.Fatalf("expected both plans to be short so the shortfall is comparable: %+v %+v",
+			plainPlan, specPlan)
+	}
+	if specPlan.ShortBy <= plainPlan.ShortBy {
+		t.Fatalf("charging a draft context did not increase the shortfall: %d -> %d",
+			plainPlan.ShortBy, specPlan.ShortBy)
+	}
+
+	plainBudget := BudgetFor(base, KVq8, streams, perStream, 30e9)
+	specBudget := BudgetFor(spec, KVq8, streams, perStream, 30e9)
+	if specBudget.Bytes >= plainBudget.Bytes {
+		t.Fatalf("charging a draft context left the weight budget unchanged or larger: "+
+			"%d -> %d", plainBudget.Bytes, specBudget.Bytes)
+	}
+}

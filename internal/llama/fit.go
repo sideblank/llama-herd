@@ -217,8 +217,13 @@ type Plan struct {
 // less useful than "needs another 9 GB", which tells you whether a second card closes it.
 func PlanFor(in FitInput, p KVPrecision, streams int, perStream int64) Plan {
 	total := int64(streams) * perStream
-	need := int64(float64(total) * in.Shape.KVBytesPerToken(p))
-	have := Fit(in, p).KVBudget
+	// Take the per-token cost from Fit rather than from the shape, so a charged draft
+	// context is included here too. Reading it from the shape leaves this section quietly
+	// disagreeing with the table above it — the same target reported as fitting by one and
+	// short by the other, with nothing to say which is right.
+	f := Fit(in, p)
+	need := int64(float64(total) * f.PerToken)
+	have := f.KVBudget
 
 	pl := Plan{Streams: streams, PerStream: perStream, Total: total}
 	if have >= need {
@@ -247,7 +252,8 @@ type WeightBudget struct {
 // Quantization compresses weights, not the KV cache, so this is the only budget it can move.
 // A target whose KV cost already exceeds the card is unreachable at any quantization.
 func BudgetFor(in FitInput, p KVPrecision, streams int, perStream int64, params int64) WeightBudget {
-	kvNeed := int64(float64(int64(streams)*perStream) * in.Shape.KVBytesPerToken(p))
+	// Includes the draft context when one is charged, for the same reason as PlanFor.
+	kvNeed := int64(float64(int64(streams)*perStream) * Fit(in, p).PerToken)
 	overhead := in.OverheadBytes
 	if overhead == 0 {
 		overhead = DefaultOverhead
