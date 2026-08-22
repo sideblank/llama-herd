@@ -319,3 +319,50 @@ func TestConcurrentRequestsGetIndependentSampling(t *testing.T) {
 		t.Fatalf("both temperatures should have been installed, saw %v", temps)
 	}
 }
+
+// The first token of an answer is sampled from the prompt's own logits. Skipping that leaves
+// the slot with no token to continue from, and the next pass stages whatever `next` holds —
+// the zero token — which is injected ahead of the real first token and changes the sequence
+// the model continues from.
+//
+// The symptom depends entirely on the model, which is what made this survive: a tokenizer
+// where token 0 is ordinary text produces a plausible answer with a stray prefix, while one
+// where it terminates the turn produces nothing at all and reports a clean stop.
+func TestFirstTokenIsSampledFromThePrompt(t *testing.T) {
+	f := newFake(1, 32)
+	f.script[0] = []Token{'h', 'i'}
+
+	e := New(f, Config{})
+	defer run(t, e)()
+
+	const prompt = "abc"
+	s, err := e.Submit(context.Background(), Request{Prompt: prompt, MaxTokens: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := collect(t, s)
+	if got != "hi" {
+		t.Fatalf("generated %q, want %q", got, "hi")
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if len(f.sampledAt) == 0 {
+		t.Fatal("nothing was ever sampled")
+	}
+	// The first sample must come from the position holding the last prompt token: that is
+	// where the prompt's logits landed.
+	last := Token(prompt[len(prompt)-1])
+	if first := f.sampledAt[0]; first.tok != last {
+		t.Fatalf("first sample read the position holding %q, want the last prompt token %q",
+			string(rune(first.tok)), string(rune(last)))
+	}
+	// Nothing that was never sampled may be fed back in. A zero token here is the exact
+	// signature of continuing from an unset value.
+	for _, st := range f.staged {
+		if st.tok == 0 {
+			t.Fatal("a zero token was staged: the engine continued from a value it never sampled")
+		}
+	}
+}

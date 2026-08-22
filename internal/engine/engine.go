@@ -447,6 +447,13 @@ func (e *Engine) tick(active map[SeqID]*slot) error {
 				s.batchIdx = idx
 				s.hasLogits = true
 				s.primed = true
+				// Record where the prompt's logits landed so they are actually sampled.
+				// Without this the first token of the answer is never drawn from the
+				// prompt at all: the slot is marked ready, harvest finds nothing staged,
+				// and the next pass stages whatever `next` happens to hold — the zero
+				// token — injecting it into the sequence ahead of the real first token.
+				// The model then continues from a prompt it was never given.
+				s.specIdx = append(s.specIdx[:0], idx)
 				// The prompt is now evaluated, so a drafter that reads from it has
 				// something to read. Seeding earlier hands it an empty cache.
 				if sd, ok := e.drafter.(Seeder); ok && sd != nil {

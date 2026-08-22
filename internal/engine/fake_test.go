@@ -42,6 +42,14 @@ type fakeBackend struct {
 	sampling map[SeqID]*SamplingParams
 	// samplingCalls counts SetSampling calls per sequence.
 	samplingCalls map[SeqID]int
+	// sampledAt records every position sampled, with the token that was staged there.
+	sampledAt []sampledIdx
+}
+
+type sampledIdx struct {
+	seq SeqID
+	idx int32
+	tok Token
 }
 
 type trim struct {
@@ -123,9 +131,27 @@ func (f *fakeBackend) Decode() error {
 	return nil
 }
 
-func (f *fakeBackend) SampleAt(seq SeqID, _ int32) (Token, error) {
+// SampleAt honours the batch index it is given, because that index is the whole contract:
+// logits exist only where output was requested, and sampling a position that produced none
+// reads whatever memory is there. A stand-in that ignores the index cannot tell a correct
+// caller from one that samples the wrong row, which is precisely the bug it exists to catch.
+func (f *fakeBackend) SampleAt(seq SeqID, idx int32) (Token, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	if idx < 0 || int(idx) >= len(f.staged) {
+		return 0, fmt.Errorf("fake: sampled index %d outside the batch of %d", idx, len(f.staged))
+	}
+	st := f.staged[idx]
+	if !st.wantLogits {
+		return 0, fmt.Errorf("fake: sampled index %d, which was staged without logits", idx)
+	}
+	if st.seq != seq {
+		return 0, fmt.Errorf("fake: sequence %d sampled index %d, staged for sequence %d",
+			seq, idx, st.seq)
+	}
+	f.sampledAt = append(f.sampledAt, sampledIdx{seq: seq, idx: idx, tok: st.tok})
+
 	i := f.emitted[seq]
 	f.emitted[seq] = i + 1
 	if s := f.script[seq]; i < len(s) {
