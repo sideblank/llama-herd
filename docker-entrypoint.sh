@@ -21,6 +21,12 @@
 #   LLAMA_HERD_FLASH_ATTN    flash attention, required by any quantized KV (default: false)
 #   LLAMA_HERD_MMPROJ_URL    multimodal projector, for vision models
 #   LLAMA_HERD_KV_UNIFIED    share one KV pool across streams          (default: false)
+#   LLAMA_HERD_LIBBENCH      set to "1" to run llama-bench on the model before serving and
+#                            log the result. That measures the LIBRARY — prompt processing and
+#                            token generation, one sequence — where the startup selftest
+#                            measures THIS ENGINE across its configured streams. Having both
+#                            from one boot, on one card, is what separates a library that is
+#                            slow from a herd that is not amortising.
 #   LLAMA_HERD_SELFTEST      set to "off" to skip the startup measurement (default: on).
 #                            It runs the engine at its configured stream count for a few
 #                            seconds and publishes the result on /v1/info, which is the only
@@ -113,6 +119,19 @@ if [ ! -f "$MANIFEST" ]; then
   if [ -n "${LLAMA_HERD_ADMIT_CONTEXT:-}" ]; then
     ADMIT_JSON="
       \"admit_context\": ${LLAMA_HERD_ADMIT_CONTEXT},"
+  fi
+
+  # The library's own measurement, for comparison against ours. Reported in llama-bench's
+  # format so it can also be checked against published figures for this model and quant.
+  if [ "${LLAMA_HERD_LIBBENCH:-0}" = "1" ] && [ -x /opt/llama-herd/bin/llama-bench ]; then
+    echo "entrypoint: measuring the library with llama-bench (this is not the engine)"
+    /opt/llama-herd/bin/llama-bench \
+      -m "$model_file" \
+      -p 512 -n 128 -r 3 \
+      -ngl "${LLAMA_HERD_GPU_LAYERS:--1}" \
+      -ctk "${LLAMA_HERD_KV_TYPE_K:-f16}" -ctv "${LLAMA_HERD_KV_TYPE_V:-f16}" \
+      -fa "${LLAMA_HERD_FLASH_ATTN:-auto}" 2>&1 | sed 's/^/  libbench: /' || \
+      echo "  libbench: failed — continuing to serve"
   fi
 
   cat > "$MANIFEST" <<JSON
