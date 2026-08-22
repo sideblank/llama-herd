@@ -610,3 +610,49 @@ func TestRequestCanDisableSpeculation(t *testing.T) {
 		t.Fatal("no drafts proposed for a request that did not opt out")
 	}
 }
+
+// A rejection must not cost a pass that produces nothing. The replay rebuilds state behind
+// tokens already emitted, and the next token is known by then, so it rides along. Without
+// that, every rejection spends two passes on the tokens of one — which makes speculation
+// slower than not speculating as soon as acceptance is low, the exact case it is meant to
+// degrade gracefully in.
+func TestReplayPassStillProducesAToken(t *testing.T) {
+	script := []Token{'a', 'b', 'c', 'd', 'e', 'f'}
+
+	plain := newFake(1, 64)
+	plain.script[0] = script
+	base := New(plain, Config{})
+	defer run(t, base)()
+	bs, _ := base.Submit(context.Background(), Request{Prompt: "hi", MaxTokens: 6})
+	collect(t, bs)
+	plainPasses := base.Stats().DecodePasses
+
+	spec := &rewindFake{fakeBackend: newFake(1, 64)}
+	spec.script[0] = script
+	// Always wrong, so every step rejects and every step replays.
+	e := New(spec, Config{Drafter: &scriptedDrafter{propose: []Token{'z', 'z'}, max: 2},
+		NeedsRewind: true})
+	defer run(t, e)()
+	ss, _ := e.Submit(context.Background(), Request{Prompt: "hi", MaxTokens: 6})
+	collect(t, ss)
+	specPasses := e.Stats().DecodePasses
+
+	if spec.rollbacks == 0 {
+		t.Fatal("no rollback happened, so this proves nothing")
+	}
+	// Worst-case speculation — every draft rejected — must not cost more than twice the
+	// passes of not speculating. Before the next token rode along it was exactly double,
+	// because half the passes emitted nothing at all.
+	t.Logf("passes: plain=%d spec=%d rollbacks=%d", plainPasses, specPasses, spec.rollbacks)
+	// The property worth holding: speculation that never lands a draft must still cost no
+	// more passes than not speculating at all. Every step is then either a speculative pass
+	// that emits a token or a replay pass that emits the next one, so a token still costs a
+	// pass. One pass of slack covers the step in flight when generation ends.
+	//
+	// Measured before the next token rode along: 10 passes against 6. The earlier bound of
+	// twice the plain count let that through, which is why it is stated as parity here.
+	if specPasses > plainPasses+1 {
+		t.Fatalf("worst-case speculation took %d passes against %d without it: a rejection "+
+			"is costing a pass that produces nothing", specPasses, plainPasses)
+	}
+}

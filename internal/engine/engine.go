@@ -462,8 +462,27 @@ func (e *Engine) tick(active map[SeqID]*slot) error {
 				continue
 			}
 			s.replay = s.replay[:0]
-			// Nothing was staged for sampling, so this slot produces no token this pass.
-			s.hasLogits = false
+			// The replay itself yields nothing — those tokens were emitted already. But the
+			// next token is known and can ride along in the same pass, so the pass is not
+			// spent only rebuilding state. Without this a rejection costs two passes for
+			// the tokens of one, which is enough to make speculation slower than not
+			// speculating whenever acceptance is low.
+			//
+			// Drafting is skipped this pass: a head that predicts from hidden states has
+			// not seen the replayed tokens yet, so anything it proposed here would be
+			// drafted from state it is about to be given.
+			if int(budget-e.be.BatchLen()) < 1 {
+				s.hasLogits = false
+				continue
+			}
+			idx := e.be.BatchLen()
+			if err := e.be.BatchAdd(s.next, s.pos, s.seq, true); err != nil {
+				s.hasLogits = false
+				continue
+			}
+			s.hasLogits = true
+			s.specIdx = append(s.specIdx[:0], idx)
+			s.pos++
 			continue
 		}
 
