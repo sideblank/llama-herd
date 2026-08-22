@@ -154,6 +154,13 @@ position then leaves it holding tokens the recurrent state has never seen. The a
 must be walked through again. It costs a pass per rejection, and that cost is the reason to
 measure whether speculation pays on such a model rather than assuming it does.
 
+**An HTTP measurement is not comparable to an in-process one.** Detokenization, UTF-8
+buffering, channel handoff, JSON and the network more than halved throughput here: 118.4 tok/s
+in process against 55 over HTTP, same model, same four streams, same build. Published figures
+for a GGUF come from in-process loops, so comparing a served number against one attributes the
+serving stack to the engine — which is how a 2.4x difference was reported as 5x and explained
+four different ways.
+
 **Byte-identical output is only a valid test at one stream.** Continuous batching admits
 concurrent requests as they arrive and gives each whatever batch room is left, so two runs of
 the same prompts interleave differently. Different batch composition means different

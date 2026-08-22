@@ -107,6 +107,28 @@ path gives back nothing while still occupying VRAM — the cost is paid twice. P
 overrides make this nearly free in space terms, and no third-party quantization does it,
 because nobody else is building an engine around the head.
 
+## Measure in process before measuring over HTTP
+
+The serving path costs more than it looks. Measured on a 3090 with the same model, the same
+four streams and the same build: **118.4 tok/s in process, 55 over HTTP.** Detokenization,
+UTF-8 buffering, channel handoff, JSON and the network more than halved the figure.
+
+Neither number is wrong — one is what the engine does, the other is what a remote caller sees,
+and both are worth knowing. What is wrong is comparing one against a reference measured the
+other way. A published figure for a GGUF almost always comes from an in-process loop, so
+holding an HTTP measurement up against it attributes the serving stack to the engine.
+
+The startup selftest reports the in-process figure on `/v1/info` for exactly this reason, so
+every deployment carries the number that is comparable to a published one:
+
+```bash
+curl -s localhost:8080/v1/info | jq '.models[0].selftest'
+```
+
+**And take the two apart before drawing a conclusion.** A gap between them is serving overhead;
+a gap between the in-process figure and a published one is the engine or the library. Those
+have different fixes and neither is visible if only one measurement exists.
+
 ## Measuring speculation
 
 Speculation is the one optimisation here whose failure is invisible in throughput alone. A
