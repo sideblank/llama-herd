@@ -109,14 +109,19 @@ because nobody else is building an engine around the head.
 
 ## Measure in process before measuring over HTTP
 
-The serving path costs more than it looks. Measured on a 3090 with the same model, the same
-four streams and the same build: **118.4 tok/s in process, 55 over HTTP.** Detokenization,
-UTF-8 buffering, channel handoff, JSON and the network more than halved the figure.
+Measured on one 3090, same model, same four streams, same build, **same node**: 195.7 tok/s in
+process against 182.0 over HTTP — about 7% for detokenization, UTF-8 buffering, channel
+handoff, JSON and the network.
 
-Neither number is wrong — one is what the engine does, the other is what a remote caller sees,
-and both are worth knowing. What is wrong is comparing one against a reference measured the
-other way. A published figure for a GGUF almost always comes from an in-process loop, so
-holding an HTTP measurement up against it attributes the serving stack to the engine.
+Both are worth knowing: one is what the engine does, the other is what a remote caller sees. A
+published figure for a GGUF almost always comes from an in-process loop, so an HTTP measurement
+held up against one charges the serving stack to the engine.
+
+**Compare only within a node.** An earlier reading of this put serving overhead at more than
+2x, from an in-process figure and an HTTP figure taken on different rented machines. The same
+configuration measured 42 and 118 tok/s on two nodes — 2.8x apart — so cross-node numbers
+cannot support a conclusion about method. Both figures above come from one machine minutes
+apart.
 
 The startup selftest reports the in-process figure on `/v1/info` for exactly this reason, so
 every deployment carries the number that is comparable to a published one:
