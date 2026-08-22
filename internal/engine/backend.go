@@ -154,6 +154,26 @@ type Renderer interface {
 	RenderChat(msgs []ChatMessage) (string, error)
 }
 
+// ThinkingRenderer is an optional Renderer capability for models that emit a reasoning block
+// before their answer.
+//
+// Left to itself such a model decides per request whether to think, and that decision is
+// often a near-tie — the same prompt yields an empty block on one run and hundreds of
+// reasoning tokens on the next. Those tokens are generated, counted and paid for while not
+// being answer text, so throughput becomes both lower and unpredictable.
+//
+// Suppressing it is done by priming: the assistant turn is opened with an already-closed
+// reasoning block, so the model continues into the answer. That is a change to the prompt
+// rather than to the output, which is why it is stated here rather than done quietly in the
+// tokenizer.
+type ThinkingRenderer interface {
+	// RenderChatThinking renders a chat, suppressing the reasoning block unless think is
+	// true. A model with no reasoning block ignores it.
+	RenderChatThinking(msgs []ChatMessage, think bool) (string, error)
+	// SupportsThinking reports whether this model has a reasoning block to suppress.
+	SupportsThinking() bool
+}
+
 var (
 	// ErrNoKVSlot means the KV cache could not fit the batch. Recoverable: free a
 	// sequence and resubmit.

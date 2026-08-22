@@ -329,7 +329,11 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		msgs = append(msgs, engine.ChatMessage{Role: m.Role, Content: text})
 	}
 
-	prompt, err := rend.RenderChat(msgs)
+	// Reasoning is suppressed unless the caller asks for it. Left to itself the model
+	// decides per request, and that decision is often a near-tie: the same prompt yields an
+	// empty block on one run and hundreds of reasoning tokens on the next, which makes
+	// throughput unpredictable as well as lower. A caller that wants reasoning asks for it.
+	prompt, err := renderWithThinking(rend, msgs, req.Think)
 	if err != nil {
 		s.writeErr(w, http.StatusBadRequest, "invalid_request_error",
 			fmt.Sprintf("could not render messages: %v", err))
@@ -472,4 +476,15 @@ func finishReason(r string) string {
 	default:
 		return "stop"
 	}
+}
+
+// renderWithThinking renders a chat, suppressing the model's reasoning block unless the
+// request asked for it. A model with no reasoning block renders unchanged, and a backend
+// that cannot suppress one falls back to its ordinary rendering rather than failing.
+func renderWithThinking(rend engine.Renderer, msgs []engine.ChatMessage, think *bool) (string, error) {
+	tr, ok := rend.(engine.ThinkingRenderer)
+	if !ok || tr == nil || !tr.SupportsThinking() {
+		return rend.RenderChat(msgs)
+	}
+	return tr.RenderChatThinking(msgs, think != nil && *think)
 }

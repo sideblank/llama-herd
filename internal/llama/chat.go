@@ -105,5 +105,33 @@ func (r *Runner) RenderChat(msgs []engine.ChatMessage) (string, error) {
 	return ApplyChatTemplate(r.chatTmpl, conv, true)
 }
 
+// DefaultNoThinkPrime opens and immediately closes a reasoning block, so a model that would
+// otherwise reason continues straight into its answer.
+//
+// The blank line matters: these templates are trained with the block followed by a blank
+// line before the answer, and priming without it leaves the model completing into a shape it
+// has not seen.
+const DefaultNoThinkPrime = "<think>\n\n</think>\n\n"
+
+// SupportsThinking reports whether this model has a reasoning block to suppress.
+//
+// Detected rather than configured: a model that tokenizes "<think>" to exactly one token has
+// it as a real special token, which is what the reasoning templates use. A model that
+// tokenizes it to several has only the literal characters, and priming would put stray text
+// into its prompt.
+func (r *Runner) SupportsThinking() bool { return r.thinkPrime != "" }
+
+// RenderChatThinking renders a chat, suppressing the reasoning block unless think is true.
+func (r *Runner) RenderChatThinking(msgs []engine.ChatMessage, think bool) (string, error) {
+	out, err := r.RenderChat(msgs)
+	if err != nil {
+		return "", err
+	}
+	if think || r.thinkPrime == "" {
+		return out, nil
+	}
+	return out + r.thinkPrime, nil
+}
+
 // HasChatTemplate reports whether this model can render chat messages.
 func (r *Runner) HasChatTemplate() bool { return r.chatTmpl != "" }

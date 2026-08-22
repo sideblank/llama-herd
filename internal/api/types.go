@@ -25,6 +25,15 @@ type ChatRequest struct {
 	// Stop accepts either a string or an array, which is why it is decoded loosely.
 	Stop stopValue `json:"stop,omitempty"`
 
+	// Think asks the model to reason before answering. Reasoning is off by default: left to
+	// itself a reasoning model decides per request, and the decision is often a near-tie, so
+	// the same prompt costs an empty block on one run and hundreds of tokens on the next.
+	// Those tokens are generated and paid for without being answer text.
+	//
+	// It is a request-level choice rather than a deployment-level one because the caller is
+	// the one who knows whether the question is worth reasoning about.
+	Think *bool `json:"think,omitempty"`
+
 	// Speculate turns drafting off for this request when explicitly false. Omitting it
 	// follows the model's configuration.
 	//

@@ -28,6 +28,9 @@ type Runner struct {
 	// ckpt holds one partial-state snapshot per sequence, reused across steps so that
 	// speculating does not allocate on every draft.
 	ckpt [][]byte
+	// thinkPrime opens and closes a reasoning block, suppressing it. Empty when the model
+	// has no such block, in which case nothing is ever appended.
+	thinkPrime string
 
 	nVocab int32
 	eos    Token
@@ -73,10 +76,11 @@ func kvName(t GGMLType) string {
 // Compile-time proof that Runner satisfies the scheduler's interface. Without this the
 // mismatch would only surface where the two are first wired together.
 var (
-	_ engine.Backend   = (*Runner)(nil)
-	_ engine.Renderer  = (*Runner)(nil)
-	_ engine.Rewinder  = (*Runner)(nil)
-	_ bench.PerfSource = (*Runner)(nil)
+	_ engine.Backend          = (*Runner)(nil)
+	_ engine.Renderer         = (*Runner)(nil)
+	_ engine.Rewinder         = (*Runner)(nil)
+	_ engine.ThinkingRenderer = (*Runner)(nil)
+	_ bench.PerfSource        = (*Runner)(nil)
 )
 
 // RunnerConfig describes a model to load and how to serve it.
@@ -128,6 +132,14 @@ func OpenRunner(cfg RunnerConfig) (*Runner, error) {
 		ckpt:            make([][]byte, nSeq),
 		custom:          make([]bool, nSeq),
 		defaultSampling: cfg.Sampling,
+	}
+
+	// A reasoning block can only be primed away on a model that actually has one. Tokenizing
+	// "<think>" to exactly one token proves it is a real special token rather than five
+	// ordinary characters, and priming a model without it would push stray text into every
+	// prompt.
+	if toks, err := vocab.Tokenize("<think>", false, true); err == nil && len(toks) == 1 {
+		r.thinkPrime = DefaultNoThinkPrime
 	}
 
 	for i := range r.samplers {

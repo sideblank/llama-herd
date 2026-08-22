@@ -512,3 +512,69 @@ func TestModelOnGPUProducesNoWarning(t *testing.T) {
 		t.Fatalf("no warning expected when the model is on the GPU, got %q", got.Warning)
 	}
 }
+
+// thinkingRend records whether reasoning was asked for.
+type thinkingRend struct{ lastThink, called bool }
+
+func (r *thinkingRend) RenderChat([]engine.ChatMessage) (string, error) { return "plain", nil }
+func (r *thinkingRend) SupportsThinking() bool                          { return true }
+func (r *thinkingRend) RenderChatThinking(_ []engine.ChatMessage, think bool) (string, error) {
+	r.called, r.lastThink = true, think
+	if think {
+		return "thinking", nil
+	}
+	return "primed", nil
+}
+
+// Reasoning is off unless asked for. A reasoning model left to decide costs an unpredictable
+// number of tokens that are not answer text, so the default is the predictable one and the
+// caller opts in.
+func TestReasoningIsOffUnlessRequested(t *testing.T) {
+	r := &thinkingRend{}
+	msgs := []engine.ChatMessage{{Role: "user", Content: "hi"}}
+
+	got, err := renderWithThinking(r, msgs, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.called || r.lastThink {
+		t.Fatalf("omitting think should suppress reasoning: called=%v think=%v", r.called, r.lastThink)
+	}
+	if got != "primed" {
+		t.Fatalf("rendered %q, want the primed form", got)
+	}
+
+	yes := true
+	if got, err = renderWithThinking(r, msgs, &yes); err != nil {
+		t.Fatal(err)
+	}
+	if !r.lastThink || got != "thinking" {
+		t.Fatalf("think:true should ask for reasoning, got %q think=%v", got, r.lastThink)
+	}
+
+	no := false
+	if _, err = renderWithThinking(r, msgs, &no); err != nil {
+		t.Fatal(err)
+	}
+	if r.lastThink {
+		t.Fatal("think:false should suppress reasoning")
+	}
+}
+
+// plainRend has no reasoning block at all.
+type plainRend struct{ calls int }
+
+func (p *plainRend) RenderChat([]engine.ChatMessage) (string, error) { p.calls++; return "plain", nil }
+
+// A model with no reasoning block must render unchanged. Priming one would put stray text
+// into every prompt it serves.
+func TestModelWithoutReasoningIsRenderedUnchanged(t *testing.T) {
+	p := &plainRend{}
+	got, err := renderWithThinking(p, []engine.ChatMessage{{Role: "user", Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "plain" || p.calls != 1 {
+		t.Fatalf("rendered %q with %d calls, want the ordinary rendering", got, p.calls)
+	}
+}
