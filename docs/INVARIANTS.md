@@ -134,6 +134,20 @@ speculating stream overrun the batch, which the backend rejects outright.
 **A drafter holds per-sequence state and must be released** when a slot finishes, for the same
 reason a sampler is reset.
 
+**A drafted token costs a whole decode call, not a fraction of one.** A model with one
+prediction layer predicts one token ahead, so drafting k tokens means k sequential decodes on
+the draft context, plus one to resynchronise it, plus the target's own pass. The draft context
+touches one layer against the target's forty-one, so the arithmetic looks free — and is not.
+Measured on a 3090 with a 35B-A3B at 57% acceptance and max_draft 2: a speculative pass cost
+14.2ms against 51.9ms, buying 1.72 tokens instead of 1.00. Four decode calls for 1.7 tokens.
+Fixed per-call cost dominates, and no acceptance rate recovers it.
+
+**So judge speculation on decode calls per token, not on acceptance.** Acceptance was 57% here,
+near the ceiling for a one-layer head, and speculation was still 2.1x slower than not
+speculating. The figure that decides it is (k + 2) calls divided by the tokens a step yields;
+below one it pays, above one it cannot. A head predicting several tokens per pass changes that
+arithmetic. A higher acceptance rate does not.
+
 **Speculation must not change the output.** It is an optimisation, and the token at a
 divergence is the target's own choice, so a speculative run and a plain one must produce the
 same text from the same prompt. If they differ, the state is corrupt — no matter how healthy

@@ -162,7 +162,10 @@ file that is in the prompt, filling a schema, continuing a transcript. On repeti
 reaches high acceptance; on free-form prose it finds no match and proposes nothing.
 
 *MTP drafting* uses the model's own trained prediction head, so it works on output that repeats
-nothing — free-form prose included — at the cost of the memory that head occupies:
+nothing — free-form prose included — at the cost of the memory that head occupies.
+**Measure before enabling it:** on a 35B-A3B with a one-layer head it is 2.1x SLOWER than not
+speculating, at 57% acceptance, because each drafted token costs a full decode call (see
+`docs/INVARIANTS.md`). It is off by default for that reason.
 
 ```json
 "load_mtp": true,
