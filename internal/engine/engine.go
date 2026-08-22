@@ -380,6 +380,11 @@ func (e *Engine) tick(active map[SeqID]*slot) error {
 		s.specIdx = s.specIdx[:0]
 
 		idx := e.be.BatchLen()
+		// posLast is where the token being staged sits. A drafter is told the position OF
+		// that token, not the one after it: a head that decodes into its own cache uses
+		// this to line its positions up with the target's, and being one ahead puts its
+		// cache permanently past where the target asks it to draft from.
+		posLast := s.pos
 		if err := e.be.BatchAdd(s.next, s.pos, s.seq, true); err != nil {
 			break
 		}
@@ -393,7 +398,7 @@ func (e *Engine) tick(active map[SeqID]*slot) error {
 		}
 		room := int(budget - e.be.BatchLen())
 		if n := min(e.drafter.MaxDraft(), room); n > 0 {
-			proposed, err := e.drafter.Draft(s.seq, s.next, s.pos, n)
+			proposed, err := e.drafter.Draft(s.seq, s.next, posLast, n)
 			if err != nil {
 				// A failing drafter degrades to ordinary decoding rather than
 				// failing the request: speculation is an optimisation.

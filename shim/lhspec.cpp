@@ -30,6 +30,12 @@ struct holder {
     // prompts are retained because the draft parameters hold a pointer to one rather than
     // copying it, so each must outlive every draft call that references it.
     std::vector<llama_tokens>           prompts;
+    // results are output buffers the CALLER owns. The driver does not allocate them: it
+    // writes drafts into whatever `result` points at, and asserts the buffer is empty on
+    // entry. Leaving the pointer unset dereferences an uninitialised member and crashes
+    // inside the driver, which reads as a fault in llama.cpp rather than a missing
+    // assignment here.
+    std::vector<llama_tokens>           results;
 };
 
 std::vector<std::string> split_csv(const char *s) {
@@ -145,6 +151,17 @@ void *lhspec_init(void *model_tgt, void *ctx_tgt, const char *types,
             return nullptr;
         }
         h->prompts.resize((size_t) h->params.n_parallel);
+        h->results.resize((size_t) h->params.n_parallel);
+
+        // Point every sequence at its buffer now rather than only on the path that drafts.
+        // The driver walks all sequences on each call, and although it short-circuits on
+        // the drafting flag today, an unset pointer is a fault waiting for that order to
+        // change.
+        for (int32_t i = 0; i < h->params.n_parallel; ++i) {
+            auto &dp = common_speculative_get_draft_params(h->spec.get(), (llama_seq_id) i);
+            dp.result = &h->results[(size_t) i];
+            dp.prompt = &h->prompts[(size_t) i];
+        }
     } catch (...) {
         delete h;
         return nullptr;
@@ -186,24 +203,27 @@ int32_t lhspec_draft(void *spec, int32_t seq_id, int32_t n_past, int32_t id_last
     if (seq_id < 0 || (size_t) seq_id >= h->prompts.size()) return -1;
 
     try {
+        // The driver asserts an empty buffer on entry, so this is cleared here rather than
+        // relying on the previous round having drained it.
+        auto &result = h->results[(size_t) seq_id];
+        result.clear();
+
         auto &dp = common_speculative_get_draft_params(h->spec.get(), (llama_seq_id) seq_id);
         dp.drafting = true;
         dp.n_past   = (llama_pos) n_past;
         dp.id_last  = (llama_token) id_last;
         dp.n_max    = n_max;
         dp.prompt   = &h->prompts[(size_t) seq_id];
+        dp.result   = &result;
 
         common_speculative_draft(h->spec.get());
 
         // The driver clears drafting for every sequence at the end of the call, and leaves
-        // the tokens it produced in result.
-        const auto &dp2 = common_speculative_get_draft_params(h->spec.get(), (llama_seq_id) seq_id);
-        if (!dp2.result) return 0;
-
-        const int32_t n = (int32_t) dp2.result->size();
+        // the tokens it produced in the buffer this call supplied.
+        const int32_t n = (int32_t) result.size();
         const int32_t w = n < out_cap ? n : out_cap;
         for (int32_t i = 0; i < w; ++i) {
-            out[i] = (int32_t) (*dp2.result)[(size_t) i];
+            out[i] = (int32_t) result[(size_t) i];
         }
         return w;
     } catch (...) {

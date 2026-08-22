@@ -298,3 +298,54 @@ func TestStatePredictingDrafterSeesEveryDecode(t *testing.T) {
 			"all of them", d.observed, st.DecodePasses)
 	}
 }
+
+// posRecordingDrafter records the position it was told for each draft.
+type posRecordingDrafter struct {
+	positions []Pos
+	lasts     []Token
+}
+
+func (d *posRecordingDrafter) Draft(_ SeqID, last Token, pos Pos, _ int) ([]Token, error) {
+	d.positions = append(d.positions, pos)
+	d.lasts = append(d.lasts, last)
+	return nil, nil
+}
+func (d *posRecordingDrafter) Accept(SeqID, int, Token) error { return nil }
+func (d *posRecordingDrafter) Release(SeqID)                  {}
+func (d *posRecordingDrafter) MaxDraft() int                  { return 4 }
+
+// A drafter is told the position OF the token it is continuing from, not the position after
+// it. A head that decodes into its own KV cache lines up against this, and one position too
+// high puts that cache permanently ahead of where the target asks it to draft — which the
+// backend reports as inconsistent sequence positions, not as a bad draft.
+func TestDrafterIsToldThePositionOfTheLastToken(t *testing.T) {
+	f := newFake(1, 16)
+	f.script[0] = []Token{'a', 'b', 'c'}
+	d := &posRecordingDrafter{}
+
+	e := New(f, Config{Drafter: d})
+	defer run(t, e)()
+
+	const prompt = "hello"
+	s, err := e.Submit(context.Background(), Request{Prompt: prompt, MaxTokens: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, s)
+
+	if len(d.positions) == 0 {
+		t.Fatal("the drafter was never asked for a draft")
+	}
+	// The first generated token sits immediately after the prompt, so that is the position
+	// the drafter must be given the first time it is asked.
+	want := Pos(len([]byte(prompt)))
+	if got := d.positions[0]; got != want {
+		t.Fatalf("first draft position = %d, want %d (the position of the token being "+
+			"continued, not the one after it)", got, want)
+	}
+	for i := 1; i < len(d.positions); i++ {
+		if d.positions[i] <= d.positions[i-1] {
+			t.Fatalf("draft position went backwards or stalled: %v", d.positions)
+		}
+	}
+}
