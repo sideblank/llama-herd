@@ -236,6 +236,13 @@ type ContextParams struct {
 
 	NThreads      int32
 	NThreadsBatch int32
+	// NOutputsMax bounds how many positions in one ubatch may produce logits.
+	//
+	// Zero means the library uses n_batch, which sizes the output buffer for the prefill
+	// chunk rather than for what decoding asks: vocabulary times four bytes times n_batch.
+	// On a 150k vocabulary with a 2048 batch that is over a gigabyte of device memory held
+	// for positions no decode step ever requests.
+	NOutputsMax uint32
 
 	// Embeddings makes the context produce embeddings alongside logits.
 	Embeddings bool
@@ -286,6 +293,7 @@ func DefaultContextParams() ContextParams {
 		NBatch:        uint32(c.n_batch),
 		NUBatch:       uint32(c.n_ubatch),
 		NSeqMax:       uint32(c.n_seq_max),
+		NOutputsMax:   uint32(c.n_outputs_max),
 		NThreads:      int32(c.n_threads),
 		NThreadsBatch: int32(c.n_threads_batch),
 		Embeddings:    bool(c.embeddings),
@@ -304,6 +312,7 @@ func (p ContextParams) c() C.struct_llama_context_params {
 	c.n_batch = C.uint32_t(p.NBatch)
 	c.n_ubatch = C.uint32_t(p.NUBatch)
 	c.n_seq_max = C.uint32_t(p.NSeqMax)
+	c.n_outputs_max = C.uint32_t(p.NOutputsMax)
 	c.n_threads = C.int32_t(p.NThreads)
 	c.n_threads_batch = C.int32_t(p.NThreadsBatch)
 	c.embeddings = C.bool(p.Embeddings)

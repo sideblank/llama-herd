@@ -29,6 +29,10 @@ type Runner struct {
 	// ckpt holds one partial-state snapshot per sequence, reused across steps so that
 	// speculating does not allocate on every draft.
 	ckpt [][]byte
+	// threads and outputsMax record what the context was actually created with, so startup can
+	// report the tuning rather than what it intended.
+	threads    int32
+	outputsMax uint32
 	// thinkPrime opens and closes a reasoning block, suppressing it. Empty when the model
 	// has no such block, in which case nothing is ever appended.
 	thinkPrime string
@@ -131,6 +135,8 @@ func OpenRunner(cfg RunnerConfig) (*Runner, error) {
 		kvTypeV:         kvName(cfg.Context.TypeV),
 		flashAttn:       cfg.Context.FlashAttn,
 		loadMTP:         cfg.Model.LoadMTP,
+		threads:         cfg.Context.NThreads,
+		outputsMax:      cfg.Context.NOutputsMax,
 		samplers:        make([]*Sampler, nSeq),
 		ckpt:            make([][]byte, nSeq),
 		custom:          make([]bool, nSeq),
@@ -504,3 +510,10 @@ func (r *Runner) FreeSeq(seq engine.SeqID) {
 		r.samplers[seq].Reset()
 	}
 }
+
+// Threads is the thread count this runner's context was created with.
+func (r *Runner) Threads() int32 { return r.threads }
+
+// OutputsMax is the logit-buffer bound this runner's context was created with. Zero means the
+// library chose it from the batch size.
+func (r *Runner) OutputsMax() uint32 { return r.outputsMax }

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -94,12 +95,31 @@ func runnerConfig(m manifest.Model) llama.RunnerConfig {
 	if t, ok := llama.ParseGGMLType(m.KVTypeV); ok {
 		cp.TypeV = t
 	}
+	// Tuned to the machine unless the manifest says otherwise. The library's default is four
+	// threads whatever the host, which leaves a large machine idle during CPU inference and
+	// over-serves a small one whose work is mostly waiting on a GPU.
+	onGPU := m.GPULayers != 0 && llama.HasGPU()
+	cp.NThreads = llama.AutoThreads(onGPU)
+	cp.NThreadsBatch = cp.NThreads
 	if m.Threads > 0 {
 		cp.NThreads = m.Threads
 	}
 	if m.ThreadsBatch > 0 {
 		cp.NThreadsBatch = m.ThreadsBatch
 	}
+
+	// Bound the logit buffer by what will actually be asked for. Left alone the library sizes
+	// it for a prefill chunk — vocabulary times four bytes times batch — which is over a
+	// gigabyte of device memory on a large vocabulary, reserved for positions nothing samples.
+	// A drafter reading hidden states is the exception, since prefill then really does request
+	// every position.
+	draft := 0
+	outputEverywhere := false
+	if sp := m.Speculation; sp != nil && sp.Type != "" && sp.Type != "none" {
+		draft = sp.MaxDraft
+		outputEverywhere = sp.Type == "mtp"
+	}
+	cp.NOutputsMax = llama.AutoOutputsMax(int(m.Streams), draft, outputEverywhere)
 
 	return llama.RunnerConfig{
 		ModelPath:  m.Path,
@@ -239,6 +259,9 @@ func serve(args []string) int {
 		log.Printf("  %s ready: %d streams, %d context (%d per stream)",
 			mm.Name, r.NSeqMax(), r.NCtx(), r.NCtxSeq())
 		log.Printf("  %s model: %s", mm.Name, r.Summary())
+		log.Printf("  %s tuned to this host: %d cores detected, %d threads, "+
+			"logit buffer bounded to %d outputs",
+			mm.Name, runtime.NumCPU(), r.Threads(), r.OutputsMax())
 		if r.HasVision() {
 			log.Printf("  %s vision: enabled (marker %q)", mm.Name, r.MediaMarker())
 		}

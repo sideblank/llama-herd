@@ -139,3 +139,17 @@ func cTensorSplit(split []float32) (*C.float, func()) {
 	copy(arr, split)
 	return (*C.float)(buf), func() { C.free(buf) }
 }
+
+// HasGPU reports whether a device with its own memory is present.
+//
+// It asks the same question the placement report answers, and for the same reason: what the
+// host advertises and where the weights actually run are different things, and tuning for a
+// GPU that is not there gives a CPU-bound process too few threads to work with.
+func HasGPU() bool {
+	for _, d := range Devices() {
+		if d.Type == DeviceGPU || d.Type == DeviceAccel {
+			return true
+		}
+	}
+	return false
+}
