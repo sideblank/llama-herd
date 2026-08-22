@@ -170,14 +170,26 @@ func serve(args []string) int {
 		//
 		// This is measured rather than inferred, and measured before anything is served.
 		canRewind := true
+		needsCheckpoint := false
 		if sp := mm.Speculation; sp != nil && sp.Type != "" && sp.Type != "none" {
-			if support := r.CanSeqRm(); support != llama.SeqRmPartial {
+			switch support := r.CanSeqRm(); support {
+			case llama.SeqRmPartial:
+				// Position alone rewinds this cache; nothing extra is needed.
+			case llama.SeqRmWholeOnly:
+				// The attention cache still trims by position; what cannot is the
+				// recurrent and sliding-window state, which is snapshotted instead.
+				needsCheckpoint = true
+				log.Printf("  %s speculation: this cache supports %s removal, so drafts "+
+					"are rolled back with a state checkpoint", mm.Name, support)
+			default:
 				canRewind = false
-				log.Printf("  %s speculation: disabled — this model's cache supports %s "+
-					"removal, and speculation needs to take back rejected drafts. "+
+				log.Printf("  %s speculation: disabled — this model reports %s cache "+
+					"removal, and speculation must be able to take back rejected drafts. "+
 					"Serving without it.", mm.Name, support)
 			}
 		}
+
+		ecfg.NeedsRewind = needsCheckpoint
 
 		if sp := mm.Speculation; sp != nil && sp.Type == "mtp" && canRewind {
 			// A model whose head was stripped in quantization cannot draft. That is a

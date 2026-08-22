@@ -376,6 +376,48 @@ func (ctx *Context) SeqRm(seq SeqID, p0, p1 Pos) bool {
 	return bool(C.llama_memory_seq_rm(ctx.mem, C.llama_seq_id(seq), C.llama_pos(p0), C.llama_pos(p1)))
 }
 
+// Sequence-state flags, mirroring llama.h.
+const (
+	// StateSeqPartialOnly selects only the part of a sequence's state that a positional
+	// removal cannot rewind — the recurrent and sliding-window caches. It is what makes a
+	// hybrid architecture rollback-able: the attention cache is trimmed by position, and
+	// this carries back everything that has no position to trim.
+	StateSeqPartialOnly uint32 = 1
+	// StateSeqOnDevice keeps the copy in device memory rather than moving it to host.
+	// Taking a new snapshot for a sequence invalidates any earlier on-device one for that
+	// same sequence, so exactly one may be live at a time.
+	StateSeqOnDevice uint32 = 2
+)
+
+// SeqStateSize is the byte size of a sequence's state under the given flags.
+func (ctx *Context) SeqStateSize(seq SeqID, flags uint32) int {
+	return int(C.llama_state_seq_get_size_ext(ctx.c, C.llama_seq_id(seq), C.uint32_t(flags)))
+}
+
+// SeqStateSave copies a sequence's state into buf, returning the bytes written.
+//
+// buf must be at least SeqStateSize bytes. A short buffer is a caller error rather than a
+// truncation: llama.cpp writes nothing and returns zero.
+func (ctx *Context) SeqStateSave(seq SeqID, buf []byte, flags uint32) int {
+	if len(buf) == 0 {
+		return 0
+	}
+	return int(C.llama_state_seq_get_data_ext(ctx.c,
+		(*C.uint8_t)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)),
+		C.llama_seq_id(seq), C.uint32_t(flags)))
+}
+
+// SeqStateLoad restores a sequence's state from buf, returning the bytes consumed. Zero
+// means the state was rejected — a size or layout mismatch — and the sequence is unchanged.
+func (ctx *Context) SeqStateLoad(seq SeqID, buf []byte, flags uint32) int {
+	if len(buf) == 0 {
+		return 0
+	}
+	return int(C.llama_state_seq_set_data_ext(ctx.c,
+		(*C.uint8_t)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)),
+		C.llama_seq_id(seq), C.uint32_t(flags)))
+}
+
 // SeqRmSupport describes how much of a sequence this context can remove.
 type SeqRmSupport int
 

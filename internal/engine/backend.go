@@ -99,6 +99,26 @@ type BatchObserver interface {
 	ObserveDecode() error
 }
 
+// Rewinder is an optional Backend capability for architectures whose cache cannot be
+// rewound by position alone.
+//
+// Speculation needs to take back whatever the target rejected. A positional removal handles
+// the attention cache, but recurrent and sliding-window state has no position to remove — it
+// is carried forward in place, so rejecting a draft means restoring the state that existed
+// before the draft was written.
+//
+// Checkpoint is taken at a known-good position before drafts are staged; Rollback returns to
+// it. A backend that offers this makes speculation usable on hybrid architectures, which
+// otherwise have to decline it.
+type Rewinder interface {
+	// Checkpoint snapshots the part of a sequence's state that cannot be trimmed.
+	Checkpoint(seq SeqID) error
+	// Rollback restores the last checkpoint for seq and trims the cache to `to`.
+	Rollback(seq SeqID, to Pos) error
+	// DropCheckpoint releases any snapshot held for a finished sequence.
+	DropCheckpoint(seq SeqID)
+}
+
 // OutputAtEveryPosition is an optional Drafter capability: a drafter that reads the target's
 // hidden states needs those states at every prompt position, not only the last.
 //

@@ -88,6 +88,14 @@ type slot struct {
 	prefilled bool
 	// seeded records that the drafter has been given this slot's prompt.
 	seeded bool
+	// committed holds the tokens staged this step, real token first, then the drafts. On a
+	// rollback the accepted prefix of this is what must be replayed.
+	committed []Token
+	// replay holds tokens whose state has to be rebuilt before generation continues. They
+	// have already been emitted; this only restores the model state behind them.
+	replay []Token
+	// replayFrom is the position this step started at, which is where a rollback returns to.
+	replayFrom Pos
 	// seedPrompt is the prompt kept for the drafter, which is seeded when prefill finishes
 	// rather than at admission: pending is consumed during prefill and would be empty by
 	// then.
@@ -125,6 +133,11 @@ type Engine struct {
 	// speculationUnusable records that a rollback was refused, so the reason is reported
 	// once rather than on every request that would have speculated.
 	speculationUnusable bool
+	// rewinder is set when the backend can restore state that a positional trim cannot,
+	// which is what makes speculation possible on recurrent and hybrid architectures.
+	rewinder Rewinder
+	// checkpointFailed records that a snapshot was refused at least once.
+	checkpointFailed bool
 
 	closed bool
 
@@ -133,6 +146,11 @@ type Engine struct {
 
 // Config tunes admission.
 type Config struct {
+	// NeedsRewind says the backend's cache cannot be rewound by position alone, so
+	// speculation must checkpoint and restore instead. It is measured, not guessed — see
+	// the backend's own report of what it can remove.
+	NeedsRewind bool
+
 	// MaxQueue bounds requests waiting for a slot. 0 means unbounded.
 	MaxQueue int
 
@@ -157,6 +175,14 @@ func New(be Backend, cfg Config) *Engine {
 	}
 	if o, ok := cfg.Drafter.(OutputAtEveryPosition); ok && o != nil {
 		e.outputEverywhere = o.OutputAtEveryPosition()
+	}
+	// The rewinder is only engaged when speculation is running: taking a snapshot on every
+	// step costs something, and a backend that can be trimmed by position has no use for
+	// one. cfg.NeedsRewind is set by the caller that already measured the cache.
+	if cfg.Drafter != nil && cfg.NeedsRewind {
+		if rw, ok := be.(Rewinder); ok && rw != nil {
+			e.rewinder = rw
+		}
 	}
 	return e
 }
@@ -395,12 +421,48 @@ func (e *Engine) tick(active map[SeqID]*slot) error {
 		s.draft = s.draft[:0]
 		s.specIdx = s.specIdx[:0]
 
+		// Tokens awaiting replay are re-decoded before anything new is staged. They were
+		// already emitted; this rebuilds the state behind them after a rollback threw it
+		// away. No logits are requested, because their outputs are already known — the
+		// only purpose is to walk the model forward through tokens it has agreed to.
+		if len(s.replay) > 0 {
+			// Room is checked before anything is staged. A replay stopped half way would
+			// leave the state partly rebuilt with no record of how far it got, so the slot
+			// waits for a pass that can take all of it rather than starting one it cannot
+			// finish.
+			if int(budget-e.be.BatchLen()) < len(s.replay) {
+				s.hasLogits = false
+				continue
+			}
+			failed := false
+			for _, t := range s.replay {
+				if err := e.be.BatchAdd(t, s.pos, s.seq, false); err != nil {
+					failed = true
+					break
+				}
+				s.pos++
+			}
+			if failed {
+				// The batch refused a token it had room for. The sequence's state is now
+				// partly rebuilt and cannot be reasoned about, so the request ends rather
+				// than continuing from an unknown state.
+				e.finish(active, s.seq, "", errors.New("replay after speculation rollback failed"))
+				continue
+			}
+			s.replay = s.replay[:0]
+			// Nothing was staged for sampling, so this slot produces no token this pass.
+			s.hasLogits = false
+			continue
+		}
+
 		idx := e.be.BatchLen()
 		// posLast is where the token being staged sits. A drafter is told the position OF
 		// that token, not the one after it: a head that decodes into its own cache uses
 		// this to line its positions up with the target's, and being one ahead puts its
 		// cache permanently past where the target asks it to draft from.
 		posLast := s.pos
+		s.replayFrom = s.pos
+		s.committed = append(s.committed[:0], s.next)
 		if err := e.be.BatchAdd(s.next, s.pos, s.seq, true); err != nil {
 			break
 		}
@@ -414,6 +476,18 @@ func (e *Engine) tick(active map[SeqID]*slot) error {
 		}
 		room := int(budget - e.be.BatchLen())
 		if n := min(e.drafter.MaxDraft(), room); n > 0 {
+			// On an architecture that cannot be rewound by position, snapshot the state
+			// that has no position before any draft is written into it. The snapshot is
+			// taken here, with only the accepted token staged, so it captures exactly the
+			// point speculation must be able to return to.
+			if e.rewinder != nil {
+				if err := e.rewinder.Checkpoint(s.seq); err != nil {
+					// Without a checkpoint a rejected draft cannot be taken back, so
+					// this stream simply does not speculate this step.
+					e.checkpointFailed = true
+					continue
+				}
+			}
 			proposed, err := e.drafter.Draft(s.seq, s.next, posLast, n)
 			if err != nil {
 				// A failing drafter degrades to ordinary decoding rather than
@@ -426,6 +500,7 @@ func (e *Engine) tick(active map[SeqID]*slot) error {
 					break
 				}
 				s.draft = append(s.draft, t)
+				s.committed = append(s.committed, t)
 				s.specIdx = append(s.specIdx, i)
 				s.pos++
 				e.c.proposed.Add(1)
@@ -549,7 +624,27 @@ func (e *Engine) harvest(active map[SeqID]*slot) error {
 		kept := accepted + 1
 		if kept < len(s.specIdx) {
 			s.pos -= Pos(len(s.specIdx) - kept)
-			if !e.be.TrimSeq(s.seq, s.pos) {
+			rolledBack := false
+			if e.rewinder != nil {
+				// The snapshot was taken before this batch was decoded, so it holds the
+				// state from before the accepted tokens as well as the rejected ones.
+				// Restoring it and trimming to the accepted position would leave the
+				// attention cache holding tokens the recurrent state has never seen: the
+				// two halves disagree, the model continues from a state it never produced,
+				// and the only symptom is prose that degrades. Nothing errors.
+				//
+				// So restore to the start of this step and replay what was committed. The
+				// replay costs a pass, which is the price of speculating on an
+				// architecture whose state cannot be rewound by position.
+				if err := e.rewinder.Rollback(s.seq, s.replayFrom); err != nil {
+					log.Printf("engine: rollback failed for sequence %d (%v)", s.seq, err)
+				} else {
+					rolledBack = true
+					s.replay = append(s.replay[:0], s.committed[:kept]...)
+					s.pos = s.replayFrom
+				}
+			}
+			if !rolledBack && !e.be.TrimSeq(s.seq, s.pos) {
 				// The cache still holds tokens the target rejected, and there is no way
 				// to take them back on this architecture. Continuing would submit a batch
 				// the backend refuses for inconsistent positions, killing the model for
@@ -683,6 +778,11 @@ func (e *Engine) finish(active map[SeqID]*slot, seq SeqID, reason string, err er
 	e.c.active.Add(-1)
 	if e.drafter != nil {
 		e.drafter.Release(s.seq)
+	}
+	// A snapshot belongs to the request that took it. Holding it past the request would
+	// let a reused slot roll back into a finished stream's state.
+	if e.rewinder != nil {
+		e.rewinder.DropCheckpoint(s.seq)
 	}
 	if err != nil {
 		e.c.failed.Add(1)

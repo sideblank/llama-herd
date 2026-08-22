@@ -6,6 +6,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -346,6 +347,127 @@ func TestDrafterIsToldThePositionOfTheLastToken(t *testing.T) {
 	for i := 1; i < len(d.positions); i++ {
 		if d.positions[i] <= d.positions[i-1] {
 			t.Fatalf("draft position went backwards or stalled: %v", d.positions)
+		}
+	}
+}
+
+// rewindFake wraps the fake backend with a cache that cannot be rewound by position, which
+// is what recurrent and hybrid architectures present. It models the part that matters: the
+// snapshot is taken before a batch is decoded, so restoring it discards the accepted tokens
+// too, and they have to be replayed.
+type rewindFake struct {
+	*fakeBackend
+	// applied is the token sequence the model has actually been walked through. It is what
+	// a real recurrent state would encode, and it is what must match a non-speculative run.
+	applied   []Token
+	pending   []Token
+	snapshot  []Token
+	haveSnap  bool
+	rollbacks int
+}
+
+// Staging is not applying. A checkpoint taken while a batch is being built captures the
+// state before that batch has been through the model, so the distinction is the whole point
+// of this stand-in: recording at stage time would make the snapshot look like it already
+// contained the token it is meant to precede.
+func (r *rewindFake) BatchAdd(tok Token, pos Pos, seq SeqID, wantLogits bool) error {
+	if err := r.fakeBackend.BatchAdd(tok, pos, seq, wantLogits); err != nil {
+		return err
+	}
+	r.pending = append(r.pending, tok)
+	return nil
+}
+
+func (r *rewindFake) BatchClear() {
+	r.pending = r.pending[:0]
+	r.fakeBackend.BatchClear()
+}
+
+func (r *rewindFake) Decode() error {
+	if err := r.fakeBackend.Decode(); err != nil {
+		return err
+	}
+	r.applied = append(r.applied, r.pending...)
+	r.pending = r.pending[:0]
+	return nil
+}
+
+func (r *rewindFake) TrimSeq(SeqID, Pos) bool { return false }
+
+func (r *rewindFake) Checkpoint(SeqID) error {
+	r.snapshot = append(r.snapshot[:0], r.applied...)
+	r.haveSnap = true
+	return nil
+}
+
+func (r *rewindFake) Rollback(_ SeqID, _ Pos) error {
+	if !r.haveSnap {
+		return fmt.Errorf("no checkpoint")
+	}
+	r.applied = append(r.applied[:0], r.snapshot...)
+	r.rollbacks++
+	return nil
+}
+
+func (r *rewindFake) DropCheckpoint(SeqID) { r.haveSnap = false }
+
+// Speculation is an optimisation and must not change what the model is asked to produce. On
+// an architecture that cannot rewind by position, a rollback restores state from before the
+// accepted tokens as well as the rejected ones — so the accepted ones have to be walked
+// through again. Skipping that leaves the caches disagreeing, and the only symptom is output
+// that quietly degrades: nothing errors, and the text still reads like text.
+func TestRollbackReplaysAcceptedTokens(t *testing.T) {
+	script := []Token{'a', 'b', 'c', 'd', 'e'}
+
+	// A drafter that is always wrong, so every step rejects and rolls back.
+	plain := &rewindFake{fakeBackend: newFake(1, 64)}
+	plain.script[0] = script
+	base := New(plain, Config{})
+	defer run(t, base)()
+	bs, err := base.Submit(context.Background(), Request{Prompt: "hi", MaxTokens: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantText, _ := collect(t, bs)
+
+	const prompt = "hi"
+	spec := &rewindFake{fakeBackend: newFake(1, 64)}
+	spec.script[0] = script
+	d := &scriptedDrafter{propose: []Token{'z', 'z'}, max: 2}
+	e := New(spec, Config{Drafter: d, NeedsRewind: true})
+	defer run(t, e)()
+	ss, err := e.Submit(context.Background(), Request{Prompt: prompt, MaxTokens: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotText, _ := collect(t, ss)
+
+	if gotText != wantText {
+		t.Fatalf("speculation changed the output: got %q, want %q", gotText, wantText)
+	}
+	if spec.rollbacks == 0 {
+		t.Fatal("no rollback happened, so this proves nothing")
+	}
+
+	// The real assertion. Speculation must walk the model through exactly the same tokens
+	// as a run without it. Text alone cannot show this: state and output are separate, and
+	// it is precisely when they diverge that the output stays readable while being wrong.
+	want := plain.applied
+	// The speculative run may be one step behind: the last step rolls back and the request
+	// ends before replaying it, which is harmless because the slot is released. Anything
+	// more than that means state was lost or corrupted.
+	if len(spec.applied) < len(want)-1 {
+		t.Fatalf("speculation walked the model through %d tokens, a plain run used %d — "+
+			"accepted tokens were rolled back and never replayed\n spec:  %v\n plain: %v",
+			len(spec.applied), len(want), spec.applied, want)
+	}
+	if len(spec.applied) > len(want) {
+		t.Fatalf("speculation applied more tokens than a plain run — something was replayed "+
+			"twice\n spec:  %v\n plain: %v", spec.applied, want)
+	}
+	for i := range spec.applied {
+		if spec.applied[i] != want[i] {
+			t.Fatalf("model state diverged at %d\n spec:  %v\n plain: %v", i, spec.applied, want)
 		}
 	}
 }

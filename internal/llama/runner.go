@@ -25,6 +25,9 @@ type Runner struct {
 	// samplers is one chain per sequence. They must not be shared: a chain carries the
 	// penalty window, so two streams on one chain would penalise each other's history.
 	samplers []*Sampler
+	// ckpt holds one partial-state snapshot per sequence, reused across steps so that
+	// speculating does not allocate on every draft.
+	ckpt [][]byte
 
 	nVocab int32
 	eos    Token
@@ -72,6 +75,7 @@ func kvName(t GGMLType) string {
 var (
 	_ engine.Backend   = (*Runner)(nil)
 	_ engine.Renderer  = (*Runner)(nil)
+	_ engine.Rewinder  = (*Runner)(nil)
 	_ bench.PerfSource = (*Runner)(nil)
 )
 
@@ -121,6 +125,7 @@ func OpenRunner(cfg RunnerConfig) (*Runner, error) {
 		flashAttn:       cfg.Context.FlashAttn,
 		loadMTP:         cfg.Model.LoadMTP,
 		samplers:        make([]*Sampler, nSeq),
+		ckpt:            make([][]byte, nSeq),
 		custom:          make([]bool, nSeq),
 		defaultSampling: cfg.Sampling,
 	}
@@ -406,6 +411,58 @@ func (r *Runner) TrimSeq(seq engine.SeqID, from engine.Pos) bool {
 
 // CanSeqRm reports how much of a sequence this runner can take back.
 func (r *Runner) CanSeqRm() SeqRmSupport { return r.ctx.CanSeqRm() }
+
+// Checkpoint snapshots the part of a sequence's state that a positional trim cannot rewind.
+//
+// Only the partial state is copied — the recurrent and sliding-window caches. The attention
+// cache is far larger and is rewound by trimming instead, so copying it here would make a
+// per-step snapshot cost more than the speculation it enables.
+func (r *Runner) Checkpoint(seq engine.SeqID) error {
+	if int(seq) < 0 || int(seq) >= len(r.ckpt) {
+		return fmt.Errorf("llama: sequence %d out of range for checkpointing", seq)
+	}
+	n := r.ctx.SeqStateSize(SeqID(seq), StateSeqPartialOnly)
+	if n == 0 {
+		// Nothing that needs carrying back. Recording an empty checkpoint keeps Rollback
+		// honest about whether one was ever taken.
+		r.ckpt[seq] = r.ckpt[seq][:0]
+		return nil
+	}
+	if cap(r.ckpt[seq]) < n {
+		r.ckpt[seq] = make([]byte, n)
+	}
+	r.ckpt[seq] = r.ckpt[seq][:n]
+	if got := r.ctx.SeqStateSave(SeqID(seq), r.ckpt[seq], StateSeqPartialOnly); got == 0 {
+		r.ckpt[seq] = r.ckpt[seq][:0]
+		return fmt.Errorf("llama: could not snapshot sequence %d (%d bytes expected)", seq, n)
+	}
+	return nil
+}
+
+// Rollback restores the last checkpoint and trims the attention cache back to `to`.
+//
+// Both halves are needed and in this order: the restore carries back state that has no
+// position, and the trim removes the positions written past the accepted point. Doing either
+// alone leaves the sequence inconsistent in a way the next decode refuses.
+func (r *Runner) Rollback(seq engine.SeqID, to engine.Pos) error {
+	if int(seq) < 0 || int(seq) >= len(r.ckpt) {
+		return fmt.Errorf("llama: sequence %d out of range for rollback", seq)
+	}
+	if buf := r.ckpt[seq]; len(buf) > 0 {
+		if got := r.ctx.SeqStateLoad(SeqID(seq), buf, StateSeqPartialOnly); got == 0 {
+			return fmt.Errorf("llama: sequence %d rejected its checkpoint", seq)
+		}
+	}
+	r.ctx.SeqRm(SeqID(seq), Pos(to), -1)
+	return nil
+}
+
+// DropCheckpoint releases the snapshot held for a finished sequence.
+func (r *Runner) DropCheckpoint(seq engine.SeqID) {
+	if int(seq) >= 0 && int(seq) < len(r.ckpt) {
+		r.ckpt[seq] = r.ckpt[seq][:0]
+	}
+}
 
 // FreeSeq drops the sequence's KV cells and clears its sampler.
 //
