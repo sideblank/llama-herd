@@ -134,6 +134,32 @@ speculating stream overrun the batch, which the backend rejects outright.
 **A drafter holds per-sequence state and must be released** when a slot finishes, for the same
 reason a sampler is reset.
 
+**Speculation must not change the output.** It is an optimisation, and the token at a
+divergence is the target's own choice, so a speculative run and a plain one must produce the
+same text from the same prompt. If they differ, the state is corrupt — no matter how healthy
+acceptance, tokens-per-pass and the error count look. All three were green on a run whose prose
+had degraded into repetition.
+
+**Not every cache can be rewound by position.** `llama_memory_seq_rm` returns false when a
+partial removal is impossible, which is the normal answer for recurrent and hybrid
+architectures — the ones long-context models use. Discarding that result leaves the engine
+believing it rewound while the cache still holds rejected drafts, and the next batch is refused
+for inconsistent positions, killing the model for every stream. Measure the capability at load,
+the way upstream does: decode two tokens and try to remove one.
+
+**Where position cannot rewind, checkpoint the rest — and replay what was accepted.** A
+snapshot taken while a batch is being built precedes that batch, so restoring it discards the
+accepted tokens as well as the rejected ones. Trimming the attention cache to the accepted
+position then leaves it holding tokens the recurrent state has never seen. The accepted prefix
+must be walked through again. It costs a pass per rejection, and that cost is the reason to
+measure whether speculation pays on such a model rather than assuming it does.
+
+**A stand-in that does not model the contract cannot test it.** A fake recording state when a
+token is *staged* rather than when it is *decoded* hides an off-by-one in exactly the step a
+checkpoint occupies, and a fake returning scripted output regardless of state cannot detect
+state corruption at all. Assert on the sequence the model was walked through, against a run
+with no speculation.
+
 **Loading a prediction head is not driving one.** `load_mtp` makes the head resident; it does
 not make anything propose from it. The runtime ran for weeks reporting `mtp_loaded=true` with
 zero drafts — the head was occupying VRAM and contributing nothing, and every signal except the
