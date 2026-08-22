@@ -58,17 +58,33 @@ func DefaultSampling() SamplingParams {
 // would let their histories penalise each other.
 type Sampler struct {
 	c *C.struct_llama_sampler
+	// nVocab bounds the logit scan taken by the greedy fast path.
+	nVocab int32
+	// greedy marks a chain that selects the most likely token with nothing modifying the
+	// logits first, which can be evaluated without building a candidate array.
+	greedy bool
 }
 
 // NewSampler builds a chain from params. nVocab comes from the model's vocabulary and is
 // needed by the penalty sampler.
+// greedyDirect reports whether a chain is exactly "take the most likely token" with nothing
+// modifying the logits first. Such a chain can be evaluated by scanning the logits, which is
+// what the fast path in Sample does.
+func greedyDirect(p SamplingParams) bool {
+	if p.Temperature > 0 {
+		return false
+	}
+	// Penalties rewrite logits before the selection, so the scan would read the wrong values.
+	return !(p.RepeatLastN > 0 && (p.RepeatPenalty != 1 || p.FreqPenalty != 0 || p.PresencePenalty != 0))
+}
+
 func NewSampler(p SamplingParams, nVocab int32) (*Sampler, error) {
 	cp := C.llama_sampler_chain_default_params()
 	chain := C.llama_sampler_chain_init(cp)
 	if chain == nil {
 		return nil, errors.New("llama: could not create sampler chain")
 	}
-	s := &Sampler{c: chain}
+	s := &Sampler{c: chain, nVocab: nVocab, greedy: greedyDirect(p)}
 
 	// Order matters: penalties adjust logits, the truncations narrow the candidate set,
 	// temperature scales what survives, and the final selector draws from it.
@@ -108,7 +124,35 @@ func NewSampler(p SamplingParams, nVocab int32) (*Sampler, error) {
 }
 
 // Sample draws the next token from the logits at batch index idx.
+// Sample selects the next token for the batch entry at idx.
+//
+// A pure-greedy chain takes a direct scan of the logits instead of the library's general path.
+// That path materialises one candidate record per vocabulary entry before selecting — 12 bytes
+// times the vocabulary, per stream, per pass, written and then scanned — where the answer is a
+// single pass over the logits already in memory. On a 150k vocabulary at four streams that is
+// several megabytes of writes per forward pass, which competes for bandwidth the decode needs,
+// and it matters most on the small hosts this runs on.
+//
+// The scan matches the library's greedy selection exactly, including its tie-break: start at
+// the first entry and replace only on a strictly greater logit, so the earliest maximum wins in
+// both. Anything else in the chain — penalties, temperature, truncation — falls through to the
+// library, because those rewrite the logits the scan would read.
 func (s *Sampler) Sample(ctx *Context, idx int32) Token {
+	if s.greedy && s.nVocab > 0 {
+		if logits := ctx.LogitsIth(idx, s.nVocab); len(logits) > 0 {
+			best, bestV := 0, logits[0]
+			for i := 1; i < len(logits); i++ {
+				if logits[i] > bestV {
+					bestV, best = logits[i], i
+				}
+			}
+			return Token(best)
+		}
+	}
+	return s.sampleViaChain(ctx, idx)
+}
+
+func (s *Sampler) sampleViaChain(ctx *Context, idx int32) Token {
 	return Token(C.llama_sampler_sample(s.c, ctx.c, C.int32_t(idx)))
 }
 
