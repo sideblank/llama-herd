@@ -163,12 +163,27 @@ RUN go build -trimpath \
 # mid-pull — which is a reliability property, not just a speed one.
 FROM nvidia/cuda:${CUDA_VERSION}-base-ubuntu${UBUNTU_VERSION}
 
-# Exactly the CUDA libraries the backend names, with their SONAME symlinks preserved so the
-# links stay links rather than becoming three copies of each library.
-COPY --from=llama /usr/local/cuda/lib64/libcudart.so* /usr/local/cuda/lib64/
-COPY --from=llama /usr/local/cuda/lib64/libcublas.so* /usr/local/cuda/lib64/
-COPY --from=llama /usr/local/cuda/lib64/libcublasLt.so* /usr/local/cuda/lib64/
-COPY --from=llama /usr/lib/x86_64-linux-gnu/libnccl.so* /usr/lib/x86_64-linux-gnu/
+# Exactly the CUDA libraries the backend names.
+#
+# These are copied with `cp -P` rather than COPY because COPY dereferences symlinks. A CUDA
+# library ships as libfoo.so -> libfoo.so.12 -> libfoo.so.12.8.4.1, and COPY turns those three
+# names into three independent copies of the same file. Measured: cuBLASLt alone went in at
+# 700 MB and landed as 2.26 GB, and the whole image carried 2.3 GB of duplicates.
+#
+# That is not a disk complaint. A scheduled worker cold-pulls the entire image before the
+# container starts, so every duplicated gigabyte widens the window in which a spot node can
+# vanish mid-pull — and on a consumer uplink that window is already the main reason a
+# deployment never reaches the point of downloading its model.
+RUN --mount=from=llama,source=/usr/local/cuda/lib64,target=/cudalib,ro \
+    --mount=from=llama,source=/usr/lib/x86_64-linux-gnu,target=/syslib,ro \
+    set -eux; \
+    mkdir -p /usr/local/cuda/lib64 /usr/lib/x86_64-linux-gnu; \
+    cp -P /cudalib/libcudart.so* /cudalib/libcublas.so* /cudalib/libcublasLt.so* \
+          /usr/local/cuda/lib64/; \
+    cp -P /syslib/libnccl.so* /usr/lib/x86_64-linux-gnu/; \
+    # Prove the links survived: if these are regular files the duplication is back.
+    test -L /usr/local/cuda/lib64/libcublasLt.so; \
+    test -L /usr/lib/x86_64-linux-gnu/libnccl.so.2
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 
 # libgomp1 is required, not optional: ggml's CPU backend links OpenMP, and no CUDA base
