@@ -175,6 +175,20 @@ near-tie settles differently as a result. Corrupt state diverges early and on ne
 prompt; a near-tie diverges late and rarely. One failing prompt is not a verdict — this was
 read as a defect twice before the pattern was checked.
 
+**Keep the binding buildable against older library revisions.** Referencing an enumerator or a
+function that a newer llama.cpp introduced makes it impossible to compile against an older one,
+and therefore impossible to tell a change in the library from a change here. That comparison is
+the only thing that settles a throughput difference between this engine and one built against a
+different revision — a day went into four wrong explanations partly because it could not be run.
+Detect the capability rather than assume it: a header grep for the symbol, a stub carrying the
+same ABI, constants written as literals.
+
+**Constants written as literals must be checked against the header.** Trading a compile error
+for a silent mismatch is only safe if something catches the mismatch. Transcribing
+`llama_load_mode` by eye put every mode one place out — the enum starts at -1 — so Auto mapped
+to None and Mmap to Mlock, changing how weights load with no symptom but speed. Guard the check
+with a build tag so the older header, which is the reason for the literals, still compiles.
+
 **When a working implementation exists, diff against it before theorising.** A theory that
 explains the measurements can still be wrong, and a good one is harder to abandon than a bad
 one. Decode throughput here sat six times below what the same model, quant and card reach in
