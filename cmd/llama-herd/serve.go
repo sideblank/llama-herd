@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -255,6 +256,16 @@ func serve(args []string) int {
 	// buy. A herd that forms and amortises nothing looks healthy in every serving metric.
 	//
 	// Off with LLAMA_HERD_SELFTEST=off for a deployment that cannot spare the seconds.
+	// The library's own measurement, if the entrypoint took one. Published beside ours
+	// because a hosted runtime may offer no way to read a container's stdout, and a
+	// diagnostic that can only be logged is unavailable exactly where it is needed.
+	libBench := ""
+	if p := os.Getenv("LLAMA_HERD_LIBBENCH_FILE"); p != "" {
+		if b, err := os.ReadFile(p); err == nil {
+			libBench = strings.TrimSpace(string(b))
+		}
+	}
+
 	selftests := map[string]bench.Selftest{}
 	if os.Getenv("LLAMA_HERD_SELFTEST") != "off" {
 		for _, mm := range mf.Models {
@@ -280,6 +291,7 @@ func serve(args []string) int {
 
 	apiSrv := api.New(reg).
 		WithBuild(api.BuildInfo{Version: version, Commit: commit, LlamaCppRef: llamaCppRef}).
+		WithLibraryBench(libBench).
 		WithDevices(func() []api.DeviceInfo {
 			var out []api.DeviceInfo
 			for _, d := range llama.Devices() {

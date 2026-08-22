@@ -130,8 +130,13 @@ if [ ! -f "$MANIFEST" ]; then
       -p 512 -n 128 -r 3 \
       -ngl "${LLAMA_HERD_GPU_LAYERS:--1}" \
       -ctk "${LLAMA_HERD_KV_TYPE_K:-f16}" -ctv "${LLAMA_HERD_KV_TYPE_V:-f16}" \
-      -fa "${LLAMA_HERD_FLASH_ATTN:-auto}" 2>&1 | sed 's/^/  libbench: /' || \
-      echo "  libbench: failed — continuing to serve"
+      -fa "${LLAMA_HERD_FLASH_ATTN:-auto}" > /tmp/libbench.txt 2>&1 || \
+      echo "llama-bench failed" >> /tmp/libbench.txt
+    sed 's/^/  libbench: /' /tmp/libbench.txt
+    # Also kept on disk and pointed at by an environment variable, because a hosted runtime
+    # may give no way to read a container's stdout — which makes a measurement that only logs
+    # unreachable in exactly the deployment that needed it.
+    export LLAMA_HERD_LIBBENCH_FILE=/tmp/libbench.txt
   fi
 
   cat > "$MANIFEST" <<JSON

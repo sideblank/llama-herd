@@ -31,6 +31,8 @@ type Server struct {
 	// references hold each model's startup measurement, so a reader can tell a slow card or a
 	// changed library from a slow engine without running anything.
 	references map[string]any
+	// libBench is llama-bench's reading of the same model, taken at startup.
+	libBench string
 }
 
 // BuildInfo describes the running binary.
@@ -132,12 +134,18 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 // is currently doing. Intended to be safe to expose to whoever operates the process,
 // including an end user running it on their own machine.
 type Info struct {
-	Build       BuildInfo     `json:"build"`
-	Accelerated bool          `json:"accelerated"`
-	Warning     string        `json:"warning,omitempty"`
-	Host        hostinfo.Host `json:"host"`
-	Devices     []DeviceInfo  `json:"devices"`
-	Models      []ModelStatus `json:"models"`
+	Build       BuildInfo `json:"build"`
+	Accelerated bool      `json:"accelerated"`
+	Warning     string    `json:"warning,omitempty"`
+
+	// LibraryBench is llama-bench's own reading of this model on this card, taken before
+	// serving. It measures the library where selftest measures this engine, and the pair is
+	// what tells a slow substrate from a herd that is not amortising. Absent unless asked
+	// for, since it costs startup time.
+	LibraryBench string        `json:"library_bench,omitempty"`
+	Host         hostinfo.Host `json:"host"`
+	Devices      []DeviceInfo  `json:"devices"`
+	Models       []ModelStatus `json:"models"`
 }
 
 // ModelStatus is one model's configuration and live utilisation.
@@ -179,6 +187,14 @@ type Placement struct {
 	FlashAttn     bool   `json:"flash_attention"`
 	MTPLoaded     bool   `json:"mtp_loaded"`
 }
+
+// WithLibraryBench records llama-bench's own reading of this model, taken before serving.
+//
+// It measures the library rather than this engine, which is the comparison that says whether a
+// slow deployment is slow underneath us or because of us. Reported verbatim: it is llama-bench's
+// output, in the format published figures use, and reformatting it would only invite doubt
+// about whether it is really that tool's number.
+func (s *Server) WithLibraryBench(out string) *Server { s.libBench = out; return s }
 
 // WithSelftest records what a model measured at startup, for reporting on /v1/info.
 //
@@ -234,6 +250,8 @@ func (s *Server) snapshot() Info {
 	// Computed last, because the placement check needs the model list. Ordered by
 	// severity: no accelerator at all, then an accelerator the weights never reached,
 	// then a machine too busy to use what it has.
+	in.LibraryBench = s.libBench
+
 	switch offloaded, total := placementSummary(in.Models); {
 	case !in.Accelerated:
 		in.Warning = "no dedicated-memory GPU found — this process is running on CPU. " +
