@@ -36,6 +36,11 @@ struct holder {
     // inside the driver, which reads as a fault in llama.cpp rather than a missing
     // assignment here.
     std::vector<llama_tokens>           results;
+    // n_past_last is the position each sequence was last asked to draft from, or -1 if it
+    // has not drafted. process() requires the draft cache to hold nothing at or above this
+    // position, so the region drafting wrote has to be removed before the batch that
+    // re-evaluates those same positions is handed over.
+    std::vector<llama_pos>              n_past_last;
 };
 
 std::vector<std::string> split_csv(const char *s) {
@@ -152,6 +157,7 @@ void *lhspec_init(void *model_tgt, void *ctx_tgt, const char *types,
         }
         h->prompts.resize((size_t) h->params.n_parallel);
         h->results.resize((size_t) h->params.n_parallel);
+        h->n_past_last.assign((size_t) h->params.n_parallel, -1);
 
         // Point every sequence at its buffer now rather than only on the path that drafts.
         // The driver walks all sequences on each call, and although it short-circuits on
@@ -183,6 +189,10 @@ void lhspec_begin(void *spec, int32_t seq_id, const int32_t *prompt, int32_t n_p
         toks.push_back((llama_token) prompt[i]);
     }
     h->prompts[(size_t) seq_id] = toks;
+    // A new generation starts with nothing drafted. Leaving the previous occupant's
+    // position here would trim this sequence's cache against a position that belongs to a
+    // finished request.
+    h->n_past_last[(size_t) seq_id] = -1;
     common_speculative_begin(h->spec.get(), (llama_seq_id) seq_id, h->prompts[(size_t) seq_id]);
 }
 
@@ -190,6 +200,22 @@ int32_t lhspec_process(void *spec, void *batch) {
     auto *h = (holder *) spec;
     if (!h || !batch) return -1;
     try {
+        // Drafting decodes into the draft context's own cache, filling the region at and
+        // above n_past. The batch about to be processed covers those same positions again —
+        // upstream re-evaluates them rather than trying to reuse them — and a cache that
+        // still holds the old copy makes that batch inconsistent, which the backend rejects
+        // outright with a message about sequence positions and nothing about speculation.
+        //
+        // Removing from n_past leaves the prompt and the accepted prefix intact, which is
+        // exactly the state process() expects to find.
+        if (auto *ctx_dft = h->init ? h->init->context() : nullptr) {
+            auto *mem = llama_get_memory(ctx_dft);
+            for (size_t i = 0; i < h->n_past_last.size(); ++i) {
+                if (h->n_past_last[i] >= 0) {
+                    llama_memory_seq_rm(mem, (llama_seq_id) i, h->n_past_last[i], -1);
+                }
+            }
+        }
         return common_speculative_process(h->spec.get(), *(const llama_batch *) batch) ? 0 : 1;
     } catch (...) {
         return -1;
@@ -215,6 +241,8 @@ int32_t lhspec_draft(void *spec, int32_t seq_id, int32_t n_past, int32_t id_last
         dp.n_max    = n_max;
         dp.prompt   = &h->prompts[(size_t) seq_id];
         dp.result   = &result;
+
+        h->n_past_last[(size_t) seq_id] = (llama_pos) n_past;
 
         common_speculative_draft(h->spec.get());
 

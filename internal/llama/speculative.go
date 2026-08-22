@@ -79,9 +79,10 @@ type Speculative struct {
 }
 
 var (
-	_ engine.Drafter       = (*Speculative)(nil)
-	_ engine.Seeder        = (*Speculative)(nil)
-	_ engine.BatchObserver = (*Speculative)(nil)
+	_ engine.Drafter               = (*Speculative)(nil)
+	_ engine.Seeder                = (*Speculative)(nil)
+	_ engine.OutputAtEveryPosition = (*Speculative)(nil)
+	_ engine.BatchObserver         = (*Speculative)(nil)
 )
 
 // OpenSpeculative creates a driver over a loaded runner.
@@ -194,6 +195,14 @@ func (s *Speculative) Accept(seq engine.SeqID, accepted int, _ engine.Token) err
 	C.lhspec_accept(s.c, C.int32_t(seq), C.int32_t(accepted))
 	return nil
 }
+
+// OutputAtEveryPosition reports that this drafter reads the target's hidden states.
+//
+// The head consumes the state of each position it predicts from, and those exist only where
+// the target was asked for output. Requesting output only on the last prompt token leaves
+// the head with nothing to read: it never fills its cache, never drafts, and reports no
+// error — the same picture a model with no head presents.
+func (s *Speculative) OutputAtEveryPosition() bool { return true }
 
 // Release is a no-op: the driver keeps its own per-sequence state and resets it on the next
 // Seed, so there is nothing to discard here.

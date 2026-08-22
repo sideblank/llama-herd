@@ -86,6 +86,10 @@ type slot struct {
 	media     [][]byte
 	prompt    string
 	prefilled bool
+	// seedPrompt is the prompt kept for the drafter, which is seeded when prefill finishes
+	// rather than at admission: pending is consumed during prefill and would be empty by
+	// then.
+	seedPrompt []Token
 
 	// draft holds the tokens proposed for this tick, and specIdx where each was staged in
 	// the batch. Verification samples at those indices in order.
@@ -113,6 +117,9 @@ type Engine struct {
 	// observeFailed records that the drafter already reported an observation failure, so
 	// the warning appears once rather than on every pass for the life of the process.
 	observeFailed bool
+	// outputEverywhere is set when the drafter reads the target's hidden states, which only
+	// exist at positions where output was requested.
+	outputEverywhere bool
 
 	closed bool
 
@@ -142,6 +149,9 @@ func New(be Backend, cfg Config) *Engine {
 	}
 	for i := 0; i < n; i++ {
 		e.free = append(e.free, SeqID(i))
+	}
+	if o, ok := cfg.Drafter.(OutputAtEveryPosition); ok && o != nil {
+		e.outputEverywhere = o.OutputAtEveryPosition()
 	}
 	return e
 }
@@ -309,11 +319,10 @@ func (e *Engine) admit(active map[SeqID]*slot) {
 		active[seq] = s
 		e.c.active.Add(1)
 
-		// A context-predicting drafter wants the prompt, which is where most of its
-		// hits come from.
-		if sd, ok := e.drafter.(Seeder); ok && sd != nil {
-			sd.Seed(seq, s.pending)
-		}
+		// The drafter is seeded when prefill completes, not here. A drafter that reads
+		// the target's hidden states needs the prompt already evaluated: seeded at
+		// admission it finds an empty cache, and from then on it drafts from nothing.
+		s.seedPrompt = append(s.seedPrompt[:0], s.pending...)
 	}
 }
 
@@ -425,7 +434,11 @@ func (e *Engine) tick(active map[SeqID]*slot) error {
 		for len(s.pending) > 0 && e.be.BatchLen() < budget {
 			last := len(s.pending) == 1
 			idx := e.be.BatchLen()
-			if err := e.be.BatchAdd(s.pending[0], s.pos, s.seq, last); err != nil {
+			// A head that predicts from hidden states needs one at every position, and a
+			// state exists only where output was asked for. Requesting only the last leaves
+			// the head with nothing to read, which looks exactly like a head that is not
+			// there.
+			if err := e.be.BatchAdd(s.pending[0], s.pos, s.seq, last || e.outputEverywhere); err != nil {
 				break
 			}
 			s.pending = s.pending[1:]
@@ -434,6 +447,11 @@ func (e *Engine) tick(active map[SeqID]*slot) error {
 				s.batchIdx = idx
 				s.hasLogits = true
 				s.primed = true
+				// The prompt is now evaluated, so a drafter that reads from it has
+				// something to read. Seeding earlier hands it an empty cache.
+				if sd, ok := e.drafter.(Seeder); ok && sd != nil {
+					sd.Seed(s.seq, s.seedPrompt)
+				}
 			}
 		}
 	}

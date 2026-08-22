@@ -99,6 +99,22 @@ type BatchObserver interface {
 	ObserveDecode() error
 }
 
+// OutputAtEveryPosition is an optional Drafter capability: a drafter that reads the target's
+// hidden states needs those states at every prompt position, not only the last.
+//
+// Ordinary prefill asks the target for output on the final prompt token alone, because that
+// is the only position whose logits are sampled. A trained prediction head consumes the
+// hidden state of each position it is going to predict from, and those states exist only
+// where output was requested. Without them the head has nothing to read and simply never
+// drafts — its cache stays empty and no counter says why.
+//
+// It is not free: every requested position occupies a row in the target's output buffer, so
+// this trades memory during prefill for the head being usable at all.
+type OutputAtEveryPosition interface {
+	// OutputAtEveryPosition reports whether prefill must request output for every token.
+	OutputAtEveryPosition() bool
+}
+
 // Seeder is an optional Drafter capability: a drafter that predicts from context wants the
 // prompt, not just the tokens generated after it.
 //
