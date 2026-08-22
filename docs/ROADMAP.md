@@ -131,11 +131,28 @@ Three properties it holds, each tested:
 The draft source is abstract on purpose: a companion model, a trained head, or an n-gram cache
 all produce candidate tokens, and the loop does not care which.
 
-Two sources ship today. **Lookup** predicts from the sequence's own context, costs no memory,
-and fires only where output repeats input. **MTP** uses the model's own head, works on output
-that repeats nothing, and costs the memory that head occupies. They are complementary rather
-than ranked, and `llama_herd_draft_acceptance_rate` is what decides between them for a given
-traffic shape.
+Two sources ship today, and **MTP has been measured and does not pay on a one-layer head.**
+
+On a 3090 with Qwen3.6-35B-A3B IQ3_S, four streams, correct KV pool layout: 57% acceptance,
+1.72 tokens per pass against 1.00, forward passes cut by a third — and **2.1x slower in
+wall-clock** than not speculating. The head predicts one token ahead, so drafting k tokens is k
+sequential decodes on the draft context, plus one to resynchronise it, plus the target's own
+pass. That context touches one layer of forty-one, so it ought to be nearly free, and it is not:
+per-call cost dominates. Four decode calls bought 1.72 tokens.
+
+Acceptance is therefore the wrong figure to optimise. 57% is close to the ceiling for one layer,
+and it was not enough. What changes the arithmetic is a head that predicts SEVERAL tokens per
+pass — one decode buying three or four drafts instead of one — which is a property of the
+weights, not of this runtime. That is the case worth building for in the model pipeline, and
+until such weights exist speculation should stay off for this model class.
+
+**Lookup** predicts from the sequence's own context and costs no memory or extra decode, so its
+arithmetic is different: it adds batch entries to an existing pass rather than adding passes. It
+remains worth measuring where output repeats input.
+
+An earlier reading here — 32% acceptance, a 2.3x penalty — was taken while the KV pool was split
+per stream, which made the library run a forward pass per sequence and inflated the cost of
+every draft. Both figures above are from the corrected configuration.
 
 Work items:
 
