@@ -159,7 +159,7 @@ func serve(args []string) int {
 			log.Printf("  %s has no chat template — chat requests for it will be refused", mm.Name)
 		}
 
-		ecfg := engine.Config{MaxQueue: mm.MaxQueue}
+		ecfg := engine.Config{MaxQueue: mm.MaxQueue, AdmitContext: mm.AdmitContext}
 
 		// Speculation writes drafts into the cache to be checked and takes back whatever
 		// the target rejected. An architecture carrying recurrent state cannot rewind, so

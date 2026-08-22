@@ -43,6 +43,15 @@ type Model struct {
 
 	// Context is the total context across all streams for this model.
 	Context uint32 `json:"context"`
+
+	// AdmitContext caps what one request may occupy, below the context allocated per
+	// stream. Zero admits the whole window.
+	//
+	// Cache memory is reserved up front from `context` whether or not requests can fill it,
+	// so admitting less costs nothing and buys certainty: a stream that cannot reach the end
+	// of its window cannot be evicted from it. The refusal happens at submit time, with a
+	// number, instead of mid-answer.
+	AdmitContext uint32 `json:"admit_context,omitempty"`
 	// Batch is the largest number of tokens one decode pass may carry, and therefore
 	// the scheduler's per-tick budget.
 	Batch uint32 `json:"batch,omitempty"`
@@ -296,6 +305,19 @@ func (m *Manifest) Validate() error {
 			problems = append(problems, fmt.Sprintf(
 				"%s: context %d across %d streams leaves %d tokens each, too little to be useful",
 				where, mm.Context, mm.Streams, mm.Context/mm.Streams))
+		}
+
+		// Admitting more than a stream owns is the mistake this field exists to prevent: it
+		// reads as a larger limit while the cache still holds what it always did, so the
+		// request is accepted and then evicted part way through its answer.
+		if mm.AdmitContext > 0 && mm.Streams > 0 && mm.Context > 0 {
+			perStream := mm.Context / mm.Streams
+			if mm.AdmitContext > perStream {
+				problems = append(problems, fmt.Sprintf(
+					"%s: admit_context %d exceeds the %d tokens each of %d streams owns — "+
+						"admitting more than is allocated evicts mid-answer instead of refusing at submit",
+					where, mm.AdmitContext, perStream, mm.Streams))
+			}
 		}
 	}
 

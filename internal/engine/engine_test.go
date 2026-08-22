@@ -366,3 +366,28 @@ func TestFirstTokenIsSampledFromThePrompt(t *testing.T) {
 		}
 	}
 }
+
+// A deployment may admit less than it allocated. The gap is slack no request can consume, so
+// an admitted request always has room to finish — the refusal happens at submit, with a
+// number, rather than as an eviction part way through an answer.
+func TestAdmissionCapIsEnforcedBelowTheAllocation(t *testing.T) {
+	f := newFake(1, 64)
+	f.nCtx, f.nCtxSeq = 4096, 4096
+
+	// Cap admission well below what the sequence owns.
+	e := New(f, Config{AdmitContext: 64})
+	defer run(t, e)()
+
+	long := strings.Repeat("x", 200)
+	if _, err := e.Submit(context.Background(), Request{Prompt: long, MaxTokens: 8}); err == nil {
+		t.Fatal("a prompt past the admission cap was accepted")
+	}
+
+	// Without the cap the same prompt fits the allocated window comfortably.
+	e2 := New(f, Config{})
+	defer run(t, e2)()
+	f.script[0] = []Token{'a'}
+	if _, err := e2.Submit(context.Background(), Request{Prompt: long, MaxTokens: 8}); err != nil {
+		t.Fatalf("the same prompt should fit the allocation with no cap: %v", err)
+	}
+}

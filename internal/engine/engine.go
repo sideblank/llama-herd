@@ -143,6 +143,9 @@ type Engine struct {
 	// speculationUnusable records that a rollback was refused, so the reason is reported
 	// once rather than on every request that would have speculated.
 	speculationUnusable bool
+	// admitCtx caps admission below the allocated per-sequence context. Zero admits the
+	// whole window.
+	admitCtx uint32
 	// rewinder is set when the backend can restore state that a positional trim cannot,
 	// which is what makes speculation possible on recurrent and hybrid architectures.
 	rewinder Rewinder
@@ -160,6 +163,14 @@ type Config struct {
 	// speculation must checkpoint and restore instead. It is measured, not guessed — see
 	// the backend's own report of what it can remove.
 	NeedsRewind bool
+
+	// AdmitContext caps what a single request may occupy, below the context actually
+	// allocated per sequence. Zero admits the whole window.
+	//
+	// The gap is deliberate slack. Cache memory is reserved up front from the configured
+	// context whether or not requests can fill it, so admitting less than was allocated
+	// costs nothing extra and guarantees every admitted request has room to finish.
+	AdmitContext uint32
 
 	// MaxQueue bounds requests waiting for a slot. 0 means unbounded.
 	MaxQueue int
@@ -183,6 +194,7 @@ func New(be Backend, cfg Config) *Engine {
 	for i := 0; i < n; i++ {
 		e.free = append(e.free, SeqID(i))
 	}
+	e.admitCtx = cfg.AdmitContext
 	if o, ok := cfg.Drafter.(OutputAtEveryPosition); ok && o != nil {
 		e.outputEverywhere = o.OutputAtEveryPosition()
 	}
@@ -274,6 +286,13 @@ func (e *Engine) promptBudget(maxTokens int) uint32 {
 	seq := e.be.NCtxSeq()
 	if seq == 0 {
 		seq = e.be.NCtx()
+	}
+	// A deployment may admit less than it allocated, keeping the difference as slack no
+	// request can consume. A stream that cannot reach the end of its window cannot be
+	// evicted from it, which turns the worst case from a mid-answer eviction into a clear
+	// refusal at submit time.
+	if e.admitCtx > 0 && e.admitCtx < seq {
+		seq = e.admitCtx
 	}
 	reserve := uint32(defaultOutputReserve)
 	if maxTokens > 0 {

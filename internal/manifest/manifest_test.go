@@ -159,3 +159,25 @@ func TestUnknownSpeculationTypeRejected(t *testing.T) {
 		t.Fatalf("want type error naming the value, got %v", err)
 	}
 }
+
+// admit_context exists to keep slack a request cannot consume. Letting it exceed what a
+// stream owns inverts that: the limit reads larger while the cache holds what it always did,
+// so a request is accepted and then evicted part way through its answer.
+func TestAdmitContextAboveTheStreamShareIsRejected(t *testing.T) {
+	_, err := parse(t, `{"models":[{"name":"a","path":"/a.gguf","context":393216,"streams":4,
+		"admit_context":131072}]}`)
+	if err == nil || !strings.Contains(err.Error(), "admit_context") {
+		t.Fatalf("want admit_context error, got %v", err)
+	}
+}
+
+func TestAdmitContextBelowTheStreamShareIsAccepted(t *testing.T) {
+	m, err := parse(t, `{"models":[{"name":"a","path":"/a.gguf","context":425984,"streams":4,
+		"admit_context":98304}]}`)
+	if err != nil {
+		t.Fatalf("want accepted, got %v", err)
+	}
+	if got := m.Models[0].AdmitContext; got != 98304 {
+		t.Fatalf("admit_context = %d, want 98304", got)
+	}
+}
