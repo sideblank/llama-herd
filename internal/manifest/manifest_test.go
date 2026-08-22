@@ -181,3 +181,45 @@ func TestAdmitContextBelowTheStreamShareIsAccepted(t *testing.T) {
 		t.Fatalf("admit_context = %d, want 98304", got)
 	}
 }
+
+// One KV pool is what lets the library run the herd's tokens as a single forward pass rather
+// than one per sequence, so it is worth a great deal of throughput. What it costs is the
+// per-stream reservation: every stream sees the whole cache, and several admitted on that
+// basis evict their way out of it mid-answer. An admission cap restores the reservation, so
+// the combination is refused without one.
+func TestUnifiedPoolNeedsAnAdmissionCap(t *testing.T) {
+	_, err := parse(t, `{"models":[{"name":"a","path":"/a.gguf","context":425984,"streams":4,
+		"kv_unified":true}]}`)
+	if err == nil || !strings.Contains(err.Error(), "admit_context") {
+		t.Fatalf("want a demand for admit_context, got %v", err)
+	}
+}
+
+// And the cap has to actually fit: four streams admitting a quarter each is the arrangement
+// that works, four admitting the whole pool each is the one that evicts.
+func TestUnifiedPoolRefusesAnOversubscribedCap(t *testing.T) {
+	_, err := parse(t, `{"models":[{"name":"a","path":"/a.gguf","context":425984,"streams":4,
+		"kv_unified":true,"admit_context":204800}]}`)
+	if err == nil || !strings.Contains(err.Error(), "more than the") {
+		t.Fatalf("want an oversubscription error, got %v", err)
+	}
+}
+
+func TestUnifiedPoolWithAFittingCapIsAccepted(t *testing.T) {
+	m, err := parse(t, `{"models":[{"name":"a","path":"/a.gguf","context":425984,"streams":4,
+		"kv_unified":true,"admit_context":98304}]}`)
+	if err != nil {
+		t.Fatalf("4 x 96k inside a 416k pool should be accepted, got %v", err)
+	}
+	if !m.Models[0].KVUnified || m.Models[0].AdmitContext != 98304 {
+		t.Fatalf("settings did not survive parsing: %+v", m.Models[0])
+	}
+}
+
+// A single stream has nothing to share with, so the cap is not required.
+func TestUnifiedPoolWithOneStreamNeedsNoCap(t *testing.T) {
+	if _, err := parse(t, `{"models":[{"name":"a","path":"/a.gguf","context":131072,"streams":1,
+		"kv_unified":true}]}`); err != nil {
+		t.Fatalf("one stream should not need an admission cap, got %v", err)
+	}
+}

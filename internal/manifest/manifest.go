@@ -87,20 +87,24 @@ type Model struct {
 	// quantized cache does not work.
 	FlashAttention bool `json:"flash_attention,omitempty"`
 
-	// KVUnified shares one KV pool across streams instead of splitting it evenly, so a
-	// single request may exceed its even share and use whatever is free.
+	// KVUnified shares one KV pool across streams instead of splitting it evenly.
 	//
-	// EXPERIMENTAL, OFF BY DEFAULT, AND NOT TESTED UNDER LOAD.
+	// It is worth far more than the capacity flexibility it was added for. The library
+	// decides how to split a batch on this setting alone: with one pool it runs the herd's
+	// tokens as a single forward pass, and with a pool per stream it runs one pass PER
+	// SEQUENCE. Four streams therefore cost four passes rather than one, and the herd
+	// amortises nothing — measured on a 3090 with a 35B-A3B, 182 tok/s with one pool
+	// against 55 with four, from this flag alone.
 	//
-	// It works, in that the setting reaches the context and the per-stream ceiling becomes
-	// the whole pool. What has not been done is the scheduling change it needs: admission
-	// still checks a per-stream ceiling, which is a real reservation under a split but is
-	// the entire cache under one pool. Several requests can therefore each be admitted
-	// believing they may use everything, and the herd evicts its way out of the
-	// overcommitment — visible to a user as answers truncating for no stated reason.
+	// Nothing reports that. Tokens-per-pass counts the batch submitted, not what the
+	// library did with it, so it reads healthy either way.
 	//
-	// Enable it if you want one long request to use idle capacity and you can tolerate
-	// that. Leave it off for a fixed four-by-128k herd, which is the tested arrangement.
+	// The cost is that a per-stream ceiling stops being a reservation: any one request may
+	// claim the whole pool, and several admitted on that basis evict their way out of the
+	// overcommitment — a user sees an answer truncate for no stated reason. Set
+	// admit_context so that streams x admit_context fits the pool, and the reservation is
+	// restored by admission instead of by layout. The manifest refuses the combination
+	// without it rather than letting it fail under load.
 	KVUnified bool `json:"kv_unified,omitempty"`
 
 	// MMProjPath is the multimodal projector accompanying a vision model. Without it the
@@ -313,6 +317,27 @@ func (m *Manifest) Validate() error {
 			problems = append(problems, fmt.Sprintf(
 				"%s: context %d across %d streams leaves %d tokens each, too little to be useful",
 				where, mm.Context, mm.Streams, mm.Context/mm.Streams))
+		}
+
+		// One pool means a per-stream ceiling reserves nothing: every stream sees the whole
+		// cache and several can be admitted each believing they may use all of it. An
+		// admission cap is what puts the reservation back, so the combination is refused
+		// without one rather than evicting under load.
+		if mm.KVUnified && mm.Streams > 1 && mm.Context > 0 {
+			switch {
+			case mm.AdmitContext == 0:
+				problems = append(problems, fmt.Sprintf(
+					"%s: kv_unified with %d streams needs admit_context — one pool means a "+
+						"per-stream ceiling reserves nothing, so requests are admitted against "+
+						"capacity they do not have and evict mid-answer",
+					where, mm.Streams))
+			case uint64(mm.AdmitContext)*uint64(mm.Streams) > uint64(mm.Context):
+				problems = append(problems, fmt.Sprintf(
+					"%s: %d streams admitting %d tokens each need %d, more than the %d-token "+
+						"pool — every stream can be admitted and they cannot all be served",
+					where, mm.Streams, mm.AdmitContext,
+					uint64(mm.AdmitContext)*uint64(mm.Streams), mm.Context))
+			}
 		}
 
 		// Admitting more than a stream owns is the mistake this field exists to prevent: it
