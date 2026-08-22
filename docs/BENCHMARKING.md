@@ -134,6 +134,27 @@ contended box where throughput is not. Tokens-per-pass is also reported, but its
 the *stream count*, not one — four streams yielding 3.9 tokens per pass is ordinary batching,
 and reading 1.0 as the baseline reports speculation on every multi-stream run.
 
+### Verifying that speculation changed nothing
+
+Speculation must produce the same text as decoding without it. Check that before trusting any
+speedup, because acceptance, tokens-per-pass and a clean error log can all look healthy while
+the caches disagree and the prose degrades.
+
+**Run the comparison at one stream, sequentially.** Continuous batching interleaves concurrent
+requests differently on every run, and the resulting change in batch composition is enough to
+flip a near-tied token and diverge the rest. That is not a defect and not something to fix — it
+means a multi-stream byte-comparison has no stable control to compare against. Measured here
+with speculation switched off entirely: two concurrent streams disagreed with each other and
+across runs, while the same request run singly reproduced exactly.
+
+```bash
+# Same manifest twice, once with "speculation" set and once with it removed, one stream:
+llama-herd bench --url http://host:8080 --model chat --streams 1 --tokens 128
+```
+
+A difference at one stream is real and worth stopping for. A difference at four is not evidence
+of anything.
+
 ### Choose the workload deliberately
 
 Acceptance is a property of the *traffic*, not only of the model, so a single workload measures

@@ -154,6 +154,21 @@ position then leaves it holding tokens the recurrent state has never seen. The a
 must be walked through again. It costs a pass per rejection, and that cost is the reason to
 measure whether speculation pays on such a model rather than assuming it does.
 
+**Byte-identical output is only a valid test at one stream.** Continuous batching admits
+concurrent requests as they arrive and gives each whatever batch room is left, so two runs of
+the same prompts interleave differently. Different batch composition means different
+floating-point rounding, and one flipped choice between near-tied logits diverges everything
+after it. Measured on a 27B with speculation switched off entirely: two concurrent streams
+disagreed with each other and with themselves across runs, while the same request run singly
+reproduced exactly.
+
+**So verify speculation single-stream, and do not read a multi-stream difference as a defect.**
+The comparison that means something is one request at a time, sequentially, with and without
+speculation: batch composition is then identical and any difference is real. Above one stream
+the control does not reproduce, so it cannot establish anything about the thing being compared
+to it. Correctness for the multi-stream case comes from tests that are deterministic by
+construction — isolation, rollback and replay — not from comparing text.
+
 **A stand-in that does not model the contract cannot test it.** A fake recording state when a
 token is *staged* rather than when it is *decoded* hides an off-by-one in exactly the step a
 checkpoint occupies, and a fake returning scripted output regardless of state cannot detect
