@@ -133,8 +133,12 @@ identical in the two configurations**, because it counts the batch handed to the
 than what the library did with it. Only throughput against the single-stream rate shows the
 difference.
 
-Run the two back to back on one machine. A rented GPU varies by more between nodes than this
-effect is worth, and the A/B is meaningless across them.
+Run the two back to back on one machine, and watch that machine's load. A rented GPU varies by
+more between nodes than this effect is worth, so the A/B is meaningless across them — and a
+local box loaded by the measurement itself is no better. An attempt to repeat this with a 27B on
+CPU produced 0.1 tok/s at load 58, where the two configurations were indistinguishable. Use a
+model small enough that the run finishes in seconds, and check `uptime` before believing the
+numbers.
 
 ## Measure in process before measuring over HTTP
 
