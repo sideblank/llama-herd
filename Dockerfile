@@ -101,10 +101,18 @@ RUN set -eux; \
       *.a) WHOLE="-Wl,--whole-archive $LC -Wl,--no-whole-archive" ;; \
       *)   WHOLE="$LC" ;; \
     esac; \
+    # A revision predating the speculative API builds the stub instead: same ABI, reports no
+    # speculation. Being unable to build against an older library at all would make comparing
+    # the two impossible, and that comparison is how a library change is told from ours.
+    SHIM=/shim/lhspec.cpp; \
+    if ! grep -q common_speculative_types_from_gguf /src/llama.cpp/common/speculative.h 2>/dev/null; then \
+      echo "this llama.cpp predates the speculative API — building the stub shim"; \
+      SHIM=/shim/lhspec_stub.cpp; \
+    fi; \
     g++ -O2 -fPIC -shared -std=c++17 \
         -I/src/llama.cpp/include -I/src/llama.cpp/ggml/include -I/src/llama.cpp/common \
         -I/shim \
-        /shim/lhspec.cpp \
+        "$SHIM" \
         -o /opt/llama/lib/liblhspec.so \
         -L"$(dirname "$LC")" -L/opt/llama/lib \
         $WHOLE \
