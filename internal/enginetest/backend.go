@@ -60,7 +60,9 @@ func (s *Scripted) BatchClear()       { s.staged = 0 }
 func (s *Scripted) EOS() engine.Token { return s.eos }
 
 // TrimSeq is accepted and ignored: the script is positional, not stateful.
-func (s *Scripted) TrimSeq(_ engine.SeqID, _ engine.Pos) {}
+// TrimSeq reports success: this stand-in has no cache to rewind, so nothing can refuse.
+// A backend that returns false here would send the engine down its no-rewind path.
+func (s *Scripted) TrimSeq(_ engine.SeqID, _ engine.Pos) bool { return true }
 
 func (s *Scripted) FreeSeq(seq engine.SeqID) {
 	s.mu.Lock()

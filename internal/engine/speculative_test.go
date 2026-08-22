@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 )
 
@@ -470,4 +471,106 @@ func TestRollbackReplaysAcceptedTokens(t *testing.T) {
 			t.Fatalf("model state diverged at %d\n spec:  %v\n plain: %v", i, spec.applied, want)
 		}
 	}
+}
+
+// Checkpoints are per-sequence state, like samplers and drafters before them. One sequence
+// rolling back must not disturb another's, and a single-stream test cannot show that: the
+// failure needs two slots speculating at once, which is the arrangement this engine is for.
+func TestCheckpointsAreIsolatedBetweenSequences(t *testing.T) {
+	f := newFake(2, 64)
+	f.script[0] = []Token{'a', 'b', 'c'}
+	f.script[1] = []Token{'x', 'y', 'z'}
+
+	rw := &recordingRewinder{}
+	e := New(f, Config{Drafter: &scriptedDrafter{propose: []Token{'!'}, max: 1}, NeedsRewind: true})
+	e.rewinder = rw
+	defer run(t, e)()
+
+	var wg sync.WaitGroup
+	out := make([]string, 2)
+	for i := range out {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			s, err := e.Submit(context.Background(), Request{Prompt: "hi", MaxTokens: 3})
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			out[i], _ = collect(t, s)
+		}(i)
+	}
+	wg.Wait()
+
+	rw.mu.Lock()
+	defer rw.mu.Unlock()
+	if len(rw.ops) == 0 {
+		t.Fatal("no checkpoint activity, so this proves nothing")
+	}
+	// Replay the operations in order rather than inspecting the end state: a checkpoint is
+	// live only between the call that takes it and the drop that releases it, so the final
+	// state says nothing about whether each rollback had one at the time.
+	live := map[SeqID]bool{}
+	for _, op := range rw.ops {
+		switch op.kind {
+		case "checkpoint":
+			live[op.seq] = true
+		case "rollback":
+			if !live[op.seq] {
+				t.Fatalf("sequence %d rolled back with no live checkpoint: %v", op.seq, rw.ops)
+			}
+		case "drop":
+			// A slot's checkpoint must be released when it finishes, or a reused slot
+			// could roll back into a finished request's state.
+			delete(live, op.seq)
+		}
+	}
+	for seq := range live {
+		t.Fatalf("sequence %d kept its checkpoint past the end of its request: %v", seq, rw.ops)
+	}
+	// Both sequences must have participated, or the isolation was never exercised.
+	seen := map[SeqID]bool{}
+	for _, op := range rw.ops {
+		seen[op.seq] = true
+	}
+	if len(seen) < 2 {
+		t.Fatalf("only %d sequence(s) checkpointed, so isolation was not tested: %v",
+			len(seen), rw.ops)
+	}
+}
+
+type rewOp struct {
+	kind string
+	seq  SeqID
+}
+
+type recordingRewinder struct {
+	mu           sync.Mutex
+	ops          []rewOp
+	checkpointed map[SeqID]bool
+}
+
+func (r *recordingRewinder) Checkpoint(seq SeqID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.checkpointed == nil {
+		r.checkpointed = map[SeqID]bool{}
+	}
+	r.checkpointed[seq] = true
+	r.ops = append(r.ops, rewOp{"checkpoint", seq})
+	return nil
+}
+
+func (r *recordingRewinder) Rollback(seq SeqID, _ Pos) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ops = append(r.ops, rewOp{"rollback", seq})
+	return nil
+}
+
+func (r *recordingRewinder) DropCheckpoint(seq SeqID) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.checkpointed, seq)
+	r.ops = append(r.ops, rewOp{"drop", seq})
 }
