@@ -152,8 +152,25 @@ across runs, while the same request run singly reproduced exactly.
 llama-herd bench --url http://host:8080 --model chat --streams 1 --tokens 128
 ```
 
-A difference at one stream is real and worth stopping for. A difference at four is not evidence
-of anything.
+A difference at four streams is not evidence of anything. A difference at one stream is worth
+stopping for — but read *where* it lands before concluding.
+
+**Exact equality is not guaranteed even when nothing is wrong.** Speculation stages several
+tokens where plain decoding stages one, and that change in batch shape changes floating-point
+rounding. Where two continuations are nearly equal, the rounding decides which one wins, and
+the two runs part from there. That is not corruption and there is nothing to fix.
+
+The two cases look different:
+
+| | Where it parts | How often |
+|---|---|---|
+| **Corrupt state** | early — the caches disagree from the first rollback onward | almost every prompt |
+| **Near-tie** | late, deep into a long answer | one prompt in several, and only past a certain length |
+
+So a single failing prompt is not a verdict. Run several, at more than one length. Measured
+here on a 27B: one prompt diverged 91% of the way through a 300-byte answer, at a position
+already known to flip under a different batch shape with speculation switched off entirely —
+while four other prompts, including the same one generated shorter, were byte-identical.
 
 ### Choose the workload deliberately
 

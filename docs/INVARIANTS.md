@@ -169,6 +169,12 @@ the control does not reproduce, so it cannot establish anything about the thing 
 to it. Correctness for the multi-stream case comes from tests that are deterministic by
 construction — isolation, rollback and replay — not from comparing text.
 
+**Speculation changes batch shape, so byte-exact equality is a strong signal and not a
+guarantee.** Staging several tokens where one would go changes floating-point rounding, and a
+near-tie settles differently as a result. Corrupt state diverges early and on nearly every
+prompt; a near-tie diverges late and rarely. One failing prompt is not a verdict — this was
+read as a defect twice before the pattern was checked.
+
 **A stand-in that does not model the contract cannot test it.** A fake recording state when a
 token is *staged* rather than when it is *decoded* hides an off-by-one in exactly the step a
 checkpoint occupies, and a fake returning scripted output regardless of state cannot detect

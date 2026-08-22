@@ -308,15 +308,32 @@ func remoteBench(args []string) int {
 				len(res.WithSpeculation))
 			return 0
 		}
+		// How far in the answers part is the signal worth reading. Speculation stages
+		// several tokens where plain decoding stages one, and that change in batch shape
+		// changes floating-point rounding — enough to settle a near-tie the other way. So
+		// exact equality is not guaranteed even when nothing is wrong, and a late,
+		// isolated divergence is the ordinary shape of that.
+		//
+		// Corrupt state does not look like this. It diverges early, because the caches
+		// disagree from the first rollback onward, and it diverges on every prompt.
+		frac := float64(res.FirstDifference) / float64(max(len(res.WithoutSpeculation), 1))
+		verdict := "LIKELY A DEFECT"
+		advice := "This is the shape of corrupt state: the caches disagree from the first\n" +
+			"rollback onward. Check the rollback and replay path."
+		if frac > 0.5 {
+			verdict = "possibly a near-tie"
+			advice = "Late and isolated, which is also what a near-tie looks like: the two\n" +
+				"continuations were nearly equal and a different batch shape settled it the\n" +
+				"other way. Run several prompts and lengths — a defect diverges early and on\n" +
+				"most of them, a near-tie diverges late and rarely."
+		}
 		fmt.Fprintf(os.Stderr,
-			"SPECULATION CHANGED THE OUTPUT — the answers part at byte %d.\n\n"+
-				"  with    : %q\n  without : %q\n\n"+
-				"Speculation is an optimisation: the token at a divergence is the target's own\n"+
-				"choice, so the text must be identical. A difference means the caches disagree,\n"+
-				"and no counter shows it — acceptance and tokens-per-pass look healthy either way.\n",
-			res.FirstDifference,
+			"speculation changed the output — %s.\n\n"+
+				"  the answers part at byte %d of %d (%.0f%% in)\n\n"+
+				"  with    : %q\n  without : %q\n\n%s\n",
+			verdict, res.FirstDifference, len(res.WithoutSpeculation), frac*100,
 			excerpt(res.WithSpeculation, res.FirstDifference),
-			excerpt(res.WithoutSpeculation, res.FirstDifference))
+			excerpt(res.WithoutSpeculation, res.FirstDifference), advice)
 		return 1
 	}
 
