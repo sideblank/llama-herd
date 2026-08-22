@@ -182,6 +182,24 @@ either is earning its batch space. **A model whose head is loaded and whose acce
 is the failure worth catching:** the head is occupying VRAM and contributing nothing, and no
 other signal distinguishes that from working speculation.
 
+**Not every model can speculate, and the runtime measures rather than assumes.** Speculation
+writes drafts into the cache to be checked and takes back whatever the target rejected. An
+attention cache can be rewound by position; the recurrent and sliding-window state that hybrid
+architectures carry cannot, and that is what the long-context models here use. So at load the
+runtime decodes two tokens and tries to remove one:
+
+- **Rewindable by position** — speculation runs as described above.
+- **Not rewindable** — the state that has no position is snapshotted before each step and
+  restored on rejection, and the accepted tokens are then replayed, because the snapshot
+  predates them. That replay costs a forward pass per rejection, so speculation is worth
+  measuring on such a model rather than assuming it pays.
+- **Neither** — speculation is declined, with the reason, and the model is served without it.
+
+Whatever the route, **speculation does not change the output**: the same prompt produces the
+same text with it and without it. That is the property to check first when speculation is
+suspected, because acceptance, tokens-per-pass and a clean error log can all look healthy while
+the caches disagree and the prose quietly degrades.
+
 Per-request sampling is honoured — `temperature`, `top_p`, `top_k`, `min_p`, the penalties and
 `seed` layer over the model's manifest defaults, and an explicit `"temperature": 0` means greedy
 rather than "unset".
