@@ -107,6 +107,35 @@ path gives back nothing while still occupying VRAM — the cost is paid twice. P
 overrides make this nearly free in space terms, and no third-party quantization does it,
 because nobody else is building an engine around the head.
 
+## Reproducing the KV pool effect locally
+
+The setting that decides whether the herd amortises can be measured on a laptop with a small
+model in about ten seconds a run, which is worth knowing before renting anything. Two manifests
+differing only in `kv_unified`, four streams each:
+
+```bash
+llama-herd serve --manifest split.json    # kv_unified absent
+llama-herd serve --manifest unified.json  # kv_unified true, with an admit_context that fits
+```
+
+Read the startup selftest line from each. Measured on a CPU with a 0.5B, three runs each,
+back to back:
+
+```
+split   : 75.8, 73.4, 76.3   -> 75.2 tok/s
+unified : 103.0, 96.3, 106.4 -> 101.9 tok/s   1.36x
+tokens per pass: 3.88 in BOTH
+```
+
+The gap is larger on a GPU with a mixture-of-experts model — 55 to 182 tok/s on a 3090 with a
+35B-A3B — but the direction and the blind spot are the same on both. **Tokens per pass is
+identical in the two configurations**, because it counts the batch handed to the library rather
+than what the library did with it. Only throughput against the single-stream rate shows the
+difference.
+
+Run the two back to back on one machine. A rented GPU varies by more between nodes than this
+effect is worth, and the A/B is meaningless across them.
+
 ## Measure in process before measuring over HTTP
 
 Measured on one 3090, same model, same four streams, same build, **same node**: 195.7 tok/s in
