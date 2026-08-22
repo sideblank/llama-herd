@@ -154,6 +154,17 @@ position then leaves it holding tokens the recurrent state has never seen. The a
 must be walked through again. It costs a pass per rejection, and that cost is the reason to
 measure whether speculation pays on such a model rather than assuming it does.
 
+**One KV pool or one per stream decides whether the herd amortises at all.** The library splits
+a batch on that setting: with a single pool it runs every stream's tokens in one forward pass,
+with a pool per stream it runs one pass per sequence. Four streams then cost four passes and
+sharing the weights buys nothing — the premise the whole design rests on. Measured on a 3090
+with a 35B-A3B: 182 tok/s against 55, from that flag alone.
+
+**And no counter shows it.** Tokens-per-pass reads the batch handed to the library, not what
+the library did with it, so it sits at a healthy 3.88-of-4 while four passes run underneath.
+The reading that exposes it is aggregate throughput against the same model's single-sequence
+rate: a herd below its own one-stream number is not amortising, whatever else looks right.
+
 **Rented machines vary by more than most effects being measured.** The same image, manifest and
 model measured 42 and 118 tok/s on two nodes — 2.8x apart. Any conclusion drawn from figures
 taken on different machines is drawn from that spread, not from the change under test. Measure
