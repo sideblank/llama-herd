@@ -85,3 +85,7 @@ jobs:
           # platform with no GPU and no model present. The binding package's tests cover
           # capacity arithmetic only — they need the library present to link, not a GPU.
           go test ./... -race -count=1
+          # Constants this package writes as literals — so it can build against llama.cpp
+          # revisions that predate them — checked against the header that does define them.
+          # Skipped by a default build precisely because an older header would not compile it.
+          go test -tags llamaabi ./internal/llama/ -count=1

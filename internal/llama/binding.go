@@ -137,13 +137,22 @@ const (
 // LoadMode selects how weights are brought into memory.
 type LoadMode int32
 
+// Written as literals rather than as the C enum so this package builds against revisions
+// predating llama_load_mode. cgo cannot test whether an enumerator exists, and being unable to
+// compile against an older library makes it impossible to tell a change there from a change
+// here — which is the comparison that settles a throughput regression.
+//
+// These MUST match llama.h's enum (see `enum llama_load_mode`). They are checked against it by
+// TestLoadModeValuesMatchTheHeader, which builds only where the enum exists — so a reordering
+// upstream fails a test rather than silently loading weights a different way. Note the first
+// is -1, not 0: writing them out by eye gets this wrong.
 const (
-	LoadModeAuto      LoadMode = C.LLAMA_LOAD_MODE_AUTO
-	LoadModeNone      LoadMode = C.LLAMA_LOAD_MODE_NONE
-	LoadModeMmap      LoadMode = C.LLAMA_LOAD_MODE_MMAP
-	LoadModeMlock     LoadMode = C.LLAMA_LOAD_MODE_MLOCK
-	LoadModeMmapMlock LoadMode = C.LLAMA_LOAD_MODE_MMAP_MLOCK
-	LoadModeDirectIO  LoadMode = C.LLAMA_LOAD_MODE_DIRECT_IO
+	LoadModeAuto      LoadMode = -1
+	LoadModeNone      LoadMode = 0
+	LoadModeMmap      LoadMode = 1
+	LoadModeMlock     LoadMode = 2
+	LoadModeMmapMlock LoadMode = 3
+	LoadModeDirectIO  LoadMode = 4
 )
 
 // DefaultModelParams returns libllama's defaults, so callers override rather than
