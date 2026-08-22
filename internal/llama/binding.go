@@ -524,6 +524,11 @@ func (v *Vocab) Tokenize(text string, addSpecial, parseSpecial bool) ([]Token, e
 // TokenToPiece renders one token as the bytes it contributes to the output. The result can
 // be an incomplete UTF-8 sequence: a multi-byte rune may span several tokens, so callers
 // streaming text must buffer rather than assume each piece is valid UTF-8.
+// TokenToPiece renders one token.
+//
+// The buffer is allocated per call rather than reused because the result escapes to the
+// caller, which appends it to a stream. A reusable buffer would hand every caller the same
+// backing array and the next token would overwrite the last one's text.
 func (v *Vocab) TokenToPiece(t Token, special bool) ([]byte, error) {
 	buf := make([]byte, 32)
 	n := C.llama_token_to_piece(v.c, C.llama_token(t),
