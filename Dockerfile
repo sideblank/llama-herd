@@ -77,7 +77,7 @@ RUN cmake -S /src/llama.cpp -B /src/build \
       -DLLAMA_BUILD_COMMON=ON \
       -DLLAMA_BUILD_TESTS=OFF \
       -DLLAMA_BUILD_EXAMPLES=OFF \
-      -DLLAMA_BUILD_TOOLS=OFF \
+      -DLLAMA_BUILD_TOOLS=ON \
       -DLLAMA_BUILD_SERVER=OFF \
       -DLLAMA_BUILD_UI=OFF \
       -DLLAMA_BUILD_APP=OFF \
@@ -110,7 +110,13 @@ RUN set -eux; \
         $WHOLE \
         -lllama -lggml -lggml-base \
         -Wl,-rpath,'$ORIGIN' -Wl,--allow-shlib-undefined; \
-    cp /shim/lhspec.h /opt/llama/include/; \
+    cp /shim/lhspec.h /opt/llama/include/;
+    # llama-bench is the standard measurement for a GGUF: prompt processing and token
+    # generation reported separately, repeated, with the build number attached. Keeping it in
+    # the image means our own figures can always be checked against the reference on the same
+    # card, same model and same build — which is the only way a throughput claim here means
+    # anything.
+    if [ -f /src/build/bin/llama-bench ]; then cp /src/build/bin/llama-bench /opt/llama/bin/; fi; \
     # A shared common must ship too, or the runtime image loads a library whose dependency
     # is absent — a failure that appears only when the server starts.
     case "$LC" in *.so*) cp -P "$(dirname "$LC")"/libllama-common.so* /opt/llama/lib/ ;; esac

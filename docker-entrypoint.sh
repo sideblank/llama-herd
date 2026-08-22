@@ -21,6 +21,10 @@
 #   LLAMA_HERD_FLASH_ATTN    flash attention, required by any quantized KV (default: false)
 #   LLAMA_HERD_MMPROJ_URL    multimodal projector, for vision models
 #   LLAMA_HERD_KV_UNIFIED    share one KV pool across streams          (default: false)
+#   LLAMA_HERD_SELFTEST      set to "off" to skip the startup measurement (default: on).
+#                            It runs the engine at its configured stream count for a few
+#                            seconds and publishes the result on /v1/info, which is the only
+#                            way to tell a slow card or a changed library from a slow engine.
 #   LLAMA_HERD_SPEC_TYPE     speculative draft source: none | lookup | mtp  (default: none)
 #                            mtp needs LLAMA_HERD_LOAD_MTP=true and a quant that kept the head
 #   LLAMA_HERD_SPEC_MAX      tokens proposed per step                  (default: 4)

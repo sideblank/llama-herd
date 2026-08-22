@@ -28,6 +28,9 @@ type Server struct {
 	devices    Devices
 	build      BuildInfo
 	placements map[string]func() Placement
+	// references hold each model's startup measurement, so a reader can tell a slow card or a
+	// changed library from a slow engine without running anything.
+	references map[string]any
 }
 
 // BuildInfo describes the running binary.
@@ -151,6 +154,12 @@ type ModelStatus struct {
 	// while doing the work on CPU — which looks like a mysteriously slow GPU rather than
 	// a model that never reached it.
 	Placement *Placement `json:"placement,omitempty"`
+
+	// Selftest is what this deployment measured at startup, through the engine that serves
+	// the traffic. It answers a question no serving metric does: whether the herd on THIS
+	// card actually amortises, or whether every extra stream is costing a full pass while
+	// the aggregate still looks plausible.
+	Selftest any `json:"selftest,omitempty"`
 }
 
 // Placement describes how a model was loaded.
@@ -169,6 +178,18 @@ type Placement struct {
 	KVTypeV       string `json:"kv_type_v"`
 	FlashAttn     bool   `json:"flash_attention"`
 	MTPLoaded     bool   `json:"mtp_loaded"`
+}
+
+// WithSelftest records what a model measured at startup, for reporting on /v1/info.
+//
+// Set once during construction, like the placements beside it, and only read afterwards — so
+// it needs no lock and must not be written while serving.
+func (s *Server) WithSelftest(model string, st any) *Server {
+	if s.references == nil {
+		s.references = map[string]any{}
+	}
+	s.references[model] = st
+	return s
 }
 
 // PlacementSource is implemented by a backend that can describe where its weights went.
@@ -203,6 +224,9 @@ func (s *Server) snapshot() Info {
 		if p, ok := s.placements[name]; ok {
 			pp := p()
 			ms.Placement = &pp
+		}
+		if st, ok := s.references[name]; ok {
+			ms.Selftest = st
 		}
 		in.Models = append(in.Models, ms)
 	}

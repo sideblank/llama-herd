@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/sideblank/llama-herd/internal/bench"
 	"log"
 	"net/http"
 	"os"
@@ -247,6 +248,36 @@ func serve(args []string) int {
 
 	reg.Start(ctx)
 
+	// Measure what this deployment actually delivers, before it serves anything.
+	//
+	// The number that matters is not the model's speed, which can be looked up, but whether
+	// THIS card with THIS stream count reaches the throughput the arrangement is supposed to
+	// buy. A herd that forms and amortises nothing looks healthy in every serving metric.
+	//
+	// Off with LLAMA_HERD_SELFTEST=off for a deployment that cannot spare the seconds.
+	selftests := map[string]bench.Selftest{}
+	if os.Getenv("LLAMA_HERD_SELFTEST") != "off" {
+		for _, mm := range mf.Models {
+			eng, err := reg.Get(mm.Name)
+			if err != nil {
+				continue
+			}
+			streams := int(mm.Streams)
+			if streams < 1 {
+				streams = 1
+			}
+			st := bench.RunSelftest(ctx, eng, streams, 32, llamaCppRef)
+			selftests[mm.Name] = st
+			if st.Note != "" {
+				log.Printf("  %s selftest: %s", mm.Name, st.Note)
+			}
+			log.Printf("  %s selftest: %.1f tok/s across %d streams (%.1f per stream, "+
+				"%.2f tokens/pass) in %.1fs",
+				mm.Name, st.AggregateTokPerSec, st.Streams, st.PerStreamTokPerSec,
+				st.TokensPerPass, st.TookSeconds)
+		}
+	}
+
 	apiSrv := api.New(reg).
 		WithBuild(api.BuildInfo{Version: version, Commit: commit, LlamaCppRef: llamaCppRef}).
 		WithDevices(func() []api.DeviceInfo {
@@ -278,6 +309,9 @@ func serve(args []string) int {
 				MTPLoaded:          p.MTPLoaded,
 			}
 		})
+		if st, ok := selftests[mm.Name]; ok {
+			apiSrv = apiSrv.WithSelftest(mm.Name, st)
+		}
 	}
 
 	srv := &http.Server{
