@@ -55,6 +55,14 @@ type Model struct {
 	// Batch is the largest number of tokens one decode pass may carry, and therefore
 	// the scheduler's per-tick budget.
 	Batch uint32 `json:"batch,omitempty"`
+
+	// UBatch is the physical batch: the token count the compute graph and its buffers are
+	// built for. Zero leaves it to the library, which is the right answer almost always.
+	//
+	// It is not the same knob as `batch`, which only bounds one logical submission. Raising
+	// this to match `batch` builds every graph for the prefill chunk size and then runs
+	// decode — a handful of tokens — against it.
+	UBatch uint32 `json:"ubatch,omitempty"`
 	// Streams is how many concurrent generations this model can serve.
 	Streams uint32 `json:"streams"`
 

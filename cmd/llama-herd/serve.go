@@ -73,7 +73,16 @@ func runnerConfig(m manifest.Model) llama.RunnerConfig {
 	cp := llama.DefaultContextParams()
 	cp.NCtx = m.Context
 	cp.NBatch = m.Batch
-	cp.NUBatch = m.Batch
+	// n_ubatch is the PHYSICAL batch — the size the compute graph and its buffers are built
+	// for — while n_batch is only the largest logical submission. Tying them together builds
+	// every graph for the prefill chunk size and then runs decode, which submits a handful of
+	// tokens, against it.
+	//
+	// Left alone the library picks 512, which is what it is tuned for. Only lower it, never
+	// raise it to match n_batch.
+	if m.UBatch > 0 {
+		cp.NUBatch = m.UBatch
+	}
 	cp.NSeqMax = m.Streams
 	cp.KVUnified = m.KVUnified
 	cp.FlashAttn = m.FlashAttention
