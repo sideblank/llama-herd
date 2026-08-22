@@ -175,6 +175,18 @@ near-tie settles differently as a result. Corrupt state diverges early and on ne
 prompt; a near-tie diverges late and rarely. One failing prompt is not a verdict — this was
 read as a defect twice before the pattern was checked.
 
+**When a working implementation exists, diff against it before theorising.** A theory that
+explains the measurements can still be wrong, and a good one is harder to abandon than a bad
+one. Decode throughput here sat six times below what the same model, quant and card reach in
+the runtime this project was extracted from, and three mechanisms were proposed and tested to
+explain it — exhausted VRAM, batching that cannot amortise, expert divergence in a mixture
+model. Each fitted the evidence. All three were wrong.
+
+The cause was six lines of context setup: `n_ubatch` forced to the logical batch size instead
+of left at the library default, so every compute graph was built four times larger than the
+work submitted to it. Reading the two setups side by side would have found it in minutes,
+which is less time than any one of the theories took to disprove.
+
 **A stand-in that does not model the contract cannot test it.** A fake recording state when a
 token is *staged* rather than when it is *decoded* hides an off-by-one in exactly the step a
 checkpoint occupies, and a fake returning scripted output regardless of state cannot detect
