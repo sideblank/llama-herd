@@ -48,7 +48,7 @@ type Selftest struct {
 // This runs against the model already loaded rather than starting a second copy of anything.
 // The cost is a few seconds once, against not knowing whether a deployment is on a healthy
 // card, on a library build whose decode cost changed, or batching at all.
-func RunSelftest(ctx context.Context, eng *engine.Engine, streams int, genTokens int, llamaCppRef string) Selftest {
+func RunSelftest(ctx context.Context, eng *engine.Engine, streams int, genTokens int, llamaCppRef string, budget time.Duration) Selftest {
 	st := Selftest{Streams: streams, LlamaCppRef: llamaCppRef}
 	if streams < 1 {
 		st.Streams, streams = 1, 1
@@ -56,8 +56,17 @@ func RunSelftest(ctx context.Context, eng *engine.Engine, streams int, genTokens
 	if genTokens < 2 {
 		genTokens = 32
 	}
+	if budget <= 0 {
+		budget = DefaultSelftestBudget
+	}
 	st.GenTokens = genTokens
 	start := time.Now()
+
+	// A deployment must not be held out of service by its own measurement. On a slow or
+	// degraded machine this is exactly the case that runs long — which is worth knowing, but
+	// not worth waiting for, so the budget caps it and the partial result says what happened.
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
 
 	res, err := Run(ctx, eng, Config{
 		Prompt:  selftestPrompt,
@@ -66,8 +75,26 @@ func RunSelftest(ctx context.Context, eng *engine.Engine, streams int, genTokens
 		Warmup:  4,
 	})
 	if err != nil {
-		st.Note = fmt.Sprintf("selftest failed: %v", err)
 		st.TookSeconds = time.Since(start).Seconds()
+		if ctx.Err() != nil {
+			// Running out of budget is itself a finding: this machine could not produce
+			// even a short measurement in the time a healthy one takes.
+			st.Note = fmt.Sprintf("selftest exceeded its %s budget — this deployment is "+
+				"slow enough that the measurement itself did not finish", budget)
+			return st
+		}
+		st.Note = fmt.Sprintf("selftest failed: %v", err)
+		return st
+	}
+
+	// A run that produced nothing is not a slow deployment — it is a measurement that did not
+	// happen, and the two must not report the same zeros. Every stream being refused looks
+	// exactly like a card that cannot decode.
+	if res.TotalTokens == 0 || res.Failures >= streams {
+		st.TookSeconds = time.Since(start).Seconds()
+		st.Note = fmt.Sprintf("selftest produced no tokens (%d of %d streams failed) — "+
+			"this is a measurement that did not run, not a throughput of zero",
+			res.Failures, streams)
 		return st
 	}
 
@@ -89,6 +116,10 @@ func RunSelftest(ctx context.Context, eng *engine.Engine, streams int, genTokens
 	}
 	return st
 }
+
+// DefaultSelftestBudget bounds how long startup may spend measuring itself. A healthy GPU
+// deployment finishes in a second or two; anything near this is already a signal.
+const DefaultSelftestBudget = 20 * time.Second
 
 // selftestPrompt is fixed so the figure is comparable between restarts and between
 // deployments. A varying prompt would make every reading its own experiment.

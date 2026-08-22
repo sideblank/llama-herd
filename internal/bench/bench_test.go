@@ -241,3 +241,30 @@ func TestSpeculationVerdictUsesStreamCountAsBaseline(t *testing.T) {
 		}
 	}
 }
+
+// A deployment must not be held out of service by its own measurement. The machines where
+// this runs long are exactly the degraded ones, so the budget has to cap it — and the result
+// has to say that it did, rather than reporting a zero that reads as "fast" or "broken".
+func TestSelftestRespectsItsBudget(t *testing.T) {
+	be := enginetest.New(1, 256, "abcdefghijklmnopqrstuvwxyz")
+	e := engine.New(be, engine.Config{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = e.Run(ctx) }()
+
+	// Far more tokens than the budget can cover, so the cap is what ends it rather than the
+	// work finishing.
+	st := RunSelftest(ctx, e, 1, 200000, "test-ref", 20*time.Millisecond)
+
+	if st.Note == "" {
+		t.Fatal("a selftest that could not complete must say so, not report zeros")
+	}
+	if st.TookSeconds <= 0 {
+		t.Fatal("elapsed time should be reported even when the measurement did not finish")
+	}
+	// The reference must still identify what it was measuring, or a truncated result cannot
+	// be told apart from a missing one.
+	if st.LlamaCppRef != "test-ref" || st.Streams != 1 {
+		t.Fatalf("truncated selftest lost its provenance: %+v", st)
+	}
+}

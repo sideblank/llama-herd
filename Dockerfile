@@ -110,7 +110,7 @@ RUN set -eux; \
         $WHOLE \
         -lllama -lggml -lggml-base \
         -Wl,-rpath,'$ORIGIN' -Wl,--allow-shlib-undefined; \
-    cp /shim/lhspec.h /opt/llama/include/;
+    cp /shim/lhspec.h /opt/llama/include/; \
     # llama-bench is the standard measurement for a GGUF: prompt processing and token
     # generation reported separately, repeated, with the build number attached. Keeping it in
     # the image means our own figures can always be checked against the reference on the same

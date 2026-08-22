@@ -266,7 +266,7 @@ func serve(args []string) int {
 			if streams < 1 {
 				streams = 1
 			}
-			st := bench.RunSelftest(ctx, eng, streams, 32, llamaCppRef)
+			st := bench.RunSelftest(ctx, eng, streams, 32, llamaCppRef, 0)
 			selftests[mm.Name] = st
 			if st.Note != "" {
 				log.Printf("  %s selftest: %s", mm.Name, st.Note)
