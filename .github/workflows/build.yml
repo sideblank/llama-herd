@@ -61,6 +61,7 @@ jobs:
             -DLLAMA_BUILD_SERVER=OFF \
             -DLLAMA_BUILD_UI=OFF \
             -DLLAMA_BUILD_APP=OFF \
+            -DLLAMA_BUILD_MTMD=ON \
             -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/prefix"
           cmake --build "$RUNNER_TEMP/build" --config Release -j "$(nproc)"
           cmake --install "$RUNNER_TEMP/build" --config Release
