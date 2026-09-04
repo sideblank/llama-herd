@@ -390,7 +390,11 @@ propose poorly give back little.
 
 ## 7. Model lines and distribution
 
-Published alongside the engine:
+**Deferred.** The first release ships the engine only, with no model builds; it serves any GGUF
+the user points it at. The lines below are the plan for a later version, kept because §2 explains
+why an MTP-retaining build would have to be made rather than borrowed.
+
+Planned to be published alongside the engine, later:
 
 - **Qwen line** — native MTP, strong across sizes.
 - **GLM line** — likely 4.7.

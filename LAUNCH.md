@@ -112,6 +112,9 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for the reasoning behind each.
 
 ## Before publishing models
 
+Not part of the first release, which ships the engine only. Kept for the version that adds
+model builds.
+
 - [ ] **Check every base model's licence.** Quantized builds inherit the upstream terms, which are
       not Apache-2.0 and may restrict redistribution or commercial use. Some permit both freely;
       others do not. Resolve per model before the Hugging Face org exists.
