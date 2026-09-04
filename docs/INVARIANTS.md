@@ -110,6 +110,180 @@ prefix, and everything reads as working. Where token 0 ends a turn the request r
 and reports a clean stop, which reads as a broken model or a broken chat template. Both were
 observed on the same build, on qwen2 and qwen35 respectively.
 
+**The library defers the GPU wait to the first read of an output, so time it explicitly.**
+`llama_decode` queues a graph and returns; `llama_get_logits_ith` calls `llama_synchronize`
+underneath. In an engine that samples right after decoding, that bills the GPU's entire compute
+time to the sampler. It read as 52.66% of engine time in sampling and 47% in decode; calling
+`llama_synchronize` after the decode moved it to 97.61% decode and 2.06% sampling, with no
+change in throughput. Any phase timing around a lazily-synchronised API measures where the wait
+was collected, not where the work happened.
+
+**With the wait attributed correctly, this engine costs 2.4% of the total.** Staging, sampling,
+detokenization and delivery together. That bounds what tuning the scheduler can ever recover and
+says the remaining headroom is in the forward pass — stream count, quantization, kernels,
+speculation — not here.
+
+**The library's one-call sampling helper rebuilds the whole vocabulary per token.**
+`llama_sampler_sample` materialises one candidate record per vocabulary entry on every call —
+about 1.8 MB at a 150k vocabulary, above the threshold where the allocator takes a fresh mapping
+from the kernel, so each token pays a map, hundreds of page faults and an unmap. Allocate the
+candidate buffer once per chain and call `llama_sampler_apply` instead. Whatever replaces the
+helper must also call `llama_sampler_accept`: the helper does, and omitting it leaves the penalty
+samplers with an empty window, so repetition penalties silently stop applying.
+
+**Narrowing the candidate set before the chain is sound, and it is where the time is.** Every
+sampler that runs before the truncation can only lower a logit — repeat penalty divides a
+positive and multiplies a negative, frequency and presence subtract — so a token outside the
+kept set can never climb into the final top-k. Keeping `TopK + RepeatLastN` candidates
+guarantees at least `TopK` untouched ones survive. Measured on a 3090: the library's chain fell
+to 0.013 ms per token, from a sampler that had been costing more than the forward pass.
+
+**Then the cost moves into whatever does the narrowing.** Selecting candidates by histogram over
+every logit cost 0.98 ms per token — 98.6% of the sampler — so the fix had only relocated the
+work. The cutoff estimate does not need every logit: reading one in eight and cutting a margin
+lower brings selection to 0.23 ms, because a cutoff that errs low merely keeps more candidates
+and the chain no longer cares. Only the pass that collects them has to read everything.
+
+**Sampler changes must be proven byte-identical before they are believed.** Fix the seed, run
+one stream, several prompts, a few hundred tokens each, and diff. Every step above was verified
+that way; a truncation that quietly changes which token wins would show up as nothing but prose
+that reads slightly worse.
+
+**A throughput figure without its context depth means nothing beyond depth zero.** Decode reads
+the KV cache for everything already in the sequence, so a herd measured with a short prompt
+reports a ceiling it cannot hold at the context the deployment promises. Measured here: 547 tok/s
+at 24 streams with a nearly empty cache is a different quantity from the same configuration
+serving real conversations, and only the second one ships.
+
+**The aggregate decode window includes other streams' prefill.** It opens at the first token any
+stream produces and closes at the last, so while the remaining streams are still prefilling,
+their prefill is inside it. Harmless with a short prompt, dominant with a deep one — it read as
+throughput collapsing by a factor of thirty when nothing of the sort had happened. Generate
+enough tokens at depth that decode outweighs the prefill sharing the window, or measure each
+stream's own decode span.
+
+**A benchmark must refuse a configuration that cannot exist.** A prompt has to fit inside one
+sequence's share of the context along with what it will generate. A sweep asked 24 streams
+sharing 425,984 tokens to hold a 32,768-token prompt — 17,749 each — and reported a throughput
+figure for it. A number for an impossible configuration is worse than an error, because it
+looks like data.
+
+**Prefill and decode move in opposite directions with stream count, so they cannot share a
+default.** Splitting one input across more streams cost about 19% of ingest throughput while
+roughly doubling decode. One long prefill already saturates the card; dividing it adds overhead
+rather than parallelism. A deployment tuned on decode alone will be tuned wrongly for
+ingest-heavy work, and the other way round.
+
+**What costs throughput is depth within a sequence, not tokens resident across the herd.**
+Holding the same total resident and varying only the split, more and shallower sequences measured
+up to 1.9x faster than fewer and deeper ones. So subdividing a large input across streams is the
+faster arrangement, not a compromise — an intuition that the same tokens cost the same wherever
+they sit predicts the opposite, and was wrong.
+
+**More streams buy throughput; allocated context does not cost it.** Decode reads KV in
+proportion to how full a sequence currently is, not to what was reserved, so shrinking the
+allocation frees memory rather than time. What raised aggregate throughput 4x was tokens per
+forward pass — one weight read serving more sequences.
+
+**Write results where they outlive the process that produced them.** A sweep that persists after
+every configuration is still worthless if it persists into the container's `/tmp`: one
+configuration crashing destroyed three that had already succeeded. An hour of GPU time and a day
+of downstream work were lost to results that existed and then did not. Durable means outside the
+thing that can die — the repository, a mounted volume, an endpoint — and the check is to ask what
+happens when the process is killed rather than when it exits.
+
+**Record a finding when it happens, not when the campaign ends.** Results held in a session's
+context are lost to a restart, a crash, or a compaction, and what survives is a summary written
+from memory — which is how a six-hour effort gets described as forty minutes. The cost is not
+symmetric: writing a number down takes seconds, recovering it takes a rented GPU and an hour.
+
+**The stream ceiling is a cliff, and it moves with the node.** On a 3090 with
+`Qwen3.6-35B-A3B-UD-IQ3_S` and a 425,984-token unified pool, 128 sequences took the process down.
+The ladder above 48 was then measured: throughput plateaus from 48 to 64 (a 3% gain) and collapses
+at 72 on one node, while an earlier node ran flat through 72 and failed at 80. Ship 48; it sits
+furthest from a cliff whose position nothing measured can predict. See `results/3090.md`.
+
+**A benchmark must prove it is talking to the process it started.** A container left listening
+from an earlier run makes every later container fail to bind while the port keeps answering, so
+the harness measures the old build and reports it under the new build's name. Observed here as
+four consecutive A/B readings agreeing to three decimal places — identical numbers from
+different container ids, which is the tell. Compare the listening pid against the container's,
+refuse to start when the port is already held, and give each run its own port.
+
+**Identical results are evidence of a broken harness, not a stable measurement.** Real
+throughput on the same configuration varies run to run; two runs that agree exactly are almost
+always the same run counted twice.
+
+**Never ask a model for byte offsets.** It cannot count characters, and an offset that is
+plausibly wrong assembles text from the neighbouring region — the answer is confident, coherent and
+about something else, and nothing downstream can detect it. Locate spans arithmetically and let the
+model label what was located. Locating is arithmetic; only labelling is judgement.
+
+**A merge over parallel streams must be order-independent, or results depend on a race.** Streams
+finish in whatever order the scheduler produces. An order-sensitive combine answers the same
+question differently across runs, with nothing in the output to show which answer was which — the
+caller cannot see it, reproduce it, or report it. Make every rule commutative, sort by source before
+combining, and assert it by shuffling the inputs and demanding an identical result.
+
+**Disagreement between sources is information, not noise to resolve.** Two parts of a document
+saying different things is a fact about the document and frequently the important one. A merge that
+silently picks a side produces a confident answer that may be the wrong half. Collect distinct
+values, record the conflict with both sides and their provenance, and leave resolution to something
+that can show its reasoning.
+
+**A grammar belongs first in the sampler chain, and it must disable every fast path.** It masks
+tokens that cannot appear next, so samplers after it rank only valid continuations. Placed after
+truncation it filters an already-narrowed set, and if top-k has dropped every grammatically valid
+token there is nothing left to choose — which presents as a model fault. The greedy fast path must
+also be skipped: scanning raw logits picks the highest scorer regardless of the mask, producing
+exactly the output the grammar existed to prevent.
+
+**Load a grammar from a file; never interpolate one through a shell.** GBNF is dense with quotes
+and backslashes, and shell-then-JSON quoting corrupts it. The failure surfaces as "grammar failed
+to parse", which points at the grammar rather than at the quoting that broke it.
+
+**Check tied-vs-untied embeddings before any latent-space experiment.** With tied embeddings the
+output projection IS the input embedding matrix, so `logits = E·h` and a hidden state collapses to
+roughly one token of information — a whole class of architecture is bounded before it starts. With
+untied embeddings no such reduction exists. It is a metadata read (`output.weight` present or
+absent) and it decides whether the experiment means anything. Measured here: Qwen2.5-0.5B is tied,
+Qwen3.6-35B is not — so a result from the cheap local model did not transfer, and nearly became a
+wrong conclusion about the architecture.
+
+**A hidden state encodes whatever its trailing instruction asks it to predict.** The final position
+of a causal model is a next-token state, so what it carries is set by what follows the content.
+Asked to "synthesize the key entities" it encoded entities and lost a port number; asked for "the
+port number mentioned above" it predicted the port exactly. Neither is the model's representation
+of the chunk — there is no such thing without an instruction, and choosing one badly looks
+identical to the representation being incapable.
+
+**Separate "not in the state" from "lost in transit" before concluding either.** Injecting a hidden
+state and getting no detail back has two causes with opposite fixes: the state never held it, or
+the injection destroyed it. Generating directly from the same position settles it in one run —
+here it showed the value was present and the mapping was at fault, reversing a conclusion already
+written down.
+
+**A throughput shortfall against the library is only a lead once it is attributed.** The engine
+can be slower than `llama-bench` in exactly three places — staging a batch, the library's
+forward pass, harvesting — and the fix differs completely by which. The engine times all three
+and publishes the split on the selftest, because four separate theories about a throughput gap
+were argued from arithmetic before anyone measured where the time went, and all four were wrong.
+
+**Harvest time is not sampler time.** Harvest covers sampling, detokenization, and handing the
+token to the caller, and the last of those blocks when the caller is not reading. A large
+harvest share can therefore mean the consumer is the bottleneck while the sampler is innocent.
+Time the three apart before optimising any of them.
+
+**A phase share is meaningless without the absolute cost behind it.** The same sampler is ~1.6%
+of engine time on a CPU and a large fraction on a GPU, because the denominator moved: the
+library's forward pass got 20x faster and the sampler did not. Convert to time per token before
+comparing two machines, or a constant cost reads as a regression.
+
+**`llama-bench` does not sample.** Its `tg128` figure is decode with no sampler chain, no
+detokenization and no delivery, so an engine that produces usable tokens cannot match it and
+should not be expected to. The gap is the price of doing the work, and only the part above that
+price is worth chasing.
+
 **A stand-in backend must honour the batch index it is given.** Logits exist only where output
 was requested, so sampling a position that produced none reads whatever is in that memory. A
 fake that ignores the index and returns the next scripted token cannot distinguish a correct
@@ -370,3 +544,130 @@ read the running configuration before arguing with it.
 **Model cards are not evidence.** Verify against the file.
 
 **A number without its method is a claim.** State what was measured, on what, and how.
+
+## Ordering and dependencies
+
+**A model asked to respect an ordering can violate it without erroring.** Reordered or invented
+steps still read as a coherent plan. Extract the dependency graph once, then enforce it in code.
+
+**Tier barriers convert an ordering constraint into a straggler problem.** A task need only wait for
+its own dependencies, never for unrelated siblings in the same tier. Dispatch on
+dependency-satisfaction; keep tiers for reporting.
+
+**"Failed" and "never ran" need opposite responses.** A failed task may be retryable; one blocked by
+a failed prerequisite is not. Collapsing them into one status hides which is which, and name the
+originating failure rather than the immediate parent.
+
+**An answer assembled from whichever tasks succeeded is an answer to a different question.** Omit
+failed and blocked work from the assembled output and name the gap.
+
+**A cycle is caught; a missing edge is not.** A graph that sorts cleanly can still be the wrong
+graph, and nothing in the scheduler can detect it.
+
+## Code graphs and the engine boundary
+
+**A requirement nothing provides is external, not missing.** Most requirements are the standard
+library; treating an unresolved one as a broken extraction rejects nearly every real request.
+
+**A dependency cycle in code is a consolidation, not an error.** Mutually recursive symbols have no
+valid per-file ordering and always have a valid joint one.
+
+**Signatures cross tier boundaries as exact text.** Drift turns on precise bytes, so a reconstructed
+signature reintroduces the failure the tiering exists to remove. Contracts carry declarations
+without bodies.
+
+**Injection reduces drift; only parsing the output catches it.** Nothing constrains a model to
+honour text in its prompt, and a parse costs microseconds against seconds of GPU time.
+
+**"No conflicts found" is not "correct".** A cross-check can only contradict claims that were made.
+Report coverage beside every verdict, and never name a method for the question the check cannot
+answer.
+
+**Exactly one goroutine may enter a llama context.** Wide fan-out belongs above the engine boundary;
+concurrent callers race inside llama.cpp and also collapse one 48-sequence pass into 48
+single-sequence ones.
+
+**`LockOSThread` is about thread-local CUDA state, not about scheduler migration** — a goroutine is
+already pinned for the duration of a cgo call. It belongs on the single engine owner, and without a
+deferred unlock it leaks an OS thread per run.
+
+## Tokens
+
+**Character count is not a proxy for token count.** Flattening JSON syntax cuts 17.8% of characters
+and 0.0% of tokens: BPE already carries merged tokens for `","` and `":"`. Count with a tokenizer
+before believing a prefill saving.
+
+**`json.Compact` is the whole win on a pretty-printed payload** — 35.6% of tokens, lossless,
+reversible, one stdlib call. Anything more elaborate has to beat that baseline, not the pretty one.
+
+**A saving applied per stream is multiplied by the stream count, and so is its enabling header.** Key
+abbreviation saves ~32k tokens across 48 streams and the schema header that decodes it costs ~9.6k of
+them back.
+
+## KV prefix reuse
+
+**`llama_memory_seq_cp` returns void and has three behaviours**: a silent no-op when `other` is set,
+a metadata-only share when both sequences are in one stream, and a `GGML_ASSERT` that aborts the
+process on a partial cross-stream copy. A prefix copy is always a partial range, so the unified-cache
+precondition must be checked before the call, and the effect verified with `seq_pos_max` after it.
+
+**A shared prefix is computed on tokens, never on text.** BPE merges across the boundary, so a common
+string prefix does not imply a common token prefix — and cells copied for a text-derived prefix give a
+sequence history it does not have, silently.
+
+**A sequence must keep at least one token.** llama produces logits from the tokens given this pass, so
+a prompt fully absorbed into a shared prefix has nothing to sample from.
+
+## Cutting
+
+**For Go, paragraph cutting already lands on declaration boundaries** — measured 4 of 5 interior cuts
+for both strategies. Structural cutting's value is a boundary label that can be *trusted*, not a
+better position.
+
+**The overlap saving is against an unconditional window, not against prose cutting.** Measured on Go
+source: conditional 0 tokens, unconditional 1,500 over 6 chunks. A window spent where the cut severed
+nothing is pure duplicated prefill, multiplied by the stream count.
+
+**A chunk's overlap need is decided by the PRECEDING chunk's cut** — the boundary they share. Reading
+its own trailing cut repairs the far edge from the damage.
+
+**Parser boundaries are preferences, not constraints.** A 900-line function has two; treating them as
+constraints produces chunks that do not fit a stream.
+
+## Capacity
+
+**Per-stream context is a budgeting convention, not a limit.** Under `kv_unified`, llama.cpp sets
+`n_ctx_seq = n_ctx` and a single sequence may occupy the whole pool. Streams need not be equal sized.
+
+**Per-pass cost is Σ(depth) across active streams, and a deep stream does not pay for its own depth
+— the herd does.** It receives one token per pass like every other stream while making every pass
+more expensive for all of them, so its own tok/s looks unremarkable while throughput falls.
+
+**Allocation and depth are different resources.** Allocation is a memory reservation that a unified
+pool does not actually reserve; depth is what costs compute. A stream allowed 32k while sitting at 2k
+costs 2k.
+
+**Worst-case depth is known at admission: `len(tokenize(prompt)) + max_tokens`.** No prediction of
+output length is required, because `max_tokens` is the bound. Fixed class sizes therefore make
+worst-case Σ depth a boot-time constant.
+
+**An install gate must be authored from measurement, not from a fit calculation.** 128 streams fit
+the arithmetic on the 3090 and took the container with it; 72 fit and collapsed on one node while
+running on another. A conservative computed gate fails the other way, refusing configurations that
+work — and the user never learns they would have been fine.
+
+**Apple Silicon reports `recommendedMaxWorkingSetSize`, not raw RAM** — roughly 70-75% of unified
+memory, which is the right number for a fit check. But that ceiling is shared with everything else on
+the machine, so unified memory wants a larger headroom margin than dedicated VRAM.
+
+**`max_tokens` is a ceiling, not a prediction — never route on it.** Admission must use worst case
+(`input + max_tokens`) because eviction is silent, but class assignment must use input alone.
+Routing on the worst case sends `say "hello"` to the 32k class on the strength of a client default
+nobody chose.
+
+**A stream costs its depth, not its class.** Under a unified pool nothing is reserved, so a class is
+a permission ceiling on growth rather than an allocation — which is what lets admission and routing
+take different inputs.
+
+**Do not predict with a model what arithmetic already knows exactly.** `len(tokens)` is free and
+correct; a classifier over the same question can only be wrong.

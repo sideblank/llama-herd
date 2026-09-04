@@ -33,24 +33,31 @@ that let the model propose several tokens per step and have them verified in one
 distributed GGUF quants drop those tensors.** With the MTP head stripped, an `--mtp` flag is a
 no-op: there is nothing to run. This was measured, not assumed.
 
-Speculative decoding is the single largest throughput lever available on a consumer card, and you
+Speculative decoding is the largest throughput lever a consumer card has in principle, and you
 cannot pull it on a borrowed quant. Building the quants is what makes the engine's fastest path
 reachable at all. Quantization choices, KV precision, and MTP retention get made for this runtime
 rather than inherited.
+
+Whether the lever pays is measured per model, not assumed. On the one model measured so far,
+`Qwen3.6-35B-A3B`, the MTP head drafted correctly (57% acceptance) and was still net-negative on
+throughput, so the published high-throughput profile runs with speculation off. The 728 tok/s
+figure above owes nothing to MTP. See [docs/ROADMAP.md](docs/ROADMAP.md) §7b.
 
 ## Hardware
 
 Primary targets are consumer NVIDIA cards:
 
-| Card | VRAM | Arch | Throughput goal |
-|------|------|------|-----------------|
-| RTX 3090 | 24 GB | Ampere | 500 tok/s |
-| RTX 4090 | 24 GB | Ada | 750 tok/s |
-| RTX 5090 | 32 GB | Blackwell | 1000 tok/s |
+| Card | VRAM | Arch | Throughput goal | Measured |
+|------|------|------|-----------------|----------|
+| RTX 3090 | 24 GB | Ampere | 500 tok/s | **728.71 tok/s** at 48 streams, depth 0 |
+| RTX 4090 | 24 GB | Ada | 750 tok/s | not yet measured |
+| RTX 5090 | 32 GB | Blackwell | 1000 tok/s | not yet measured |
 
 Aggregate decode across concurrent streams on a single card, with a long-context target per herd
-member. See [docs/ROADMAP.md](docs/ROADMAP.md) for how these numbers were arrived at and what
-stands between here and them.
+member. The 3090 figure is one node, one model (`Qwen3.6-35B-A3B-UD-IQ3_S`), short prompts, and
+varies by more than 20% between rented cards of the same model; the method and caveats are in
+[docs/results/3090.md](docs/results/3090.md). See [docs/ROADMAP.md](docs/ROADMAP.md) for how the
+goals were arrived at and what stands between here and the other two.
 
 **It is not limited to those cards.** Anything llama.cpp runs on, this runs on. A stack of 3060s is
 a legitimate deployment, and heterogeneous multi-GPU — different cards, different capacities, in
@@ -93,9 +100,10 @@ single RTX 3090:
 - **~318 tok/s aggregate** driving 6 streams of an 8B-class model at Q4 through one context
 - 128k chunked prefill; the input ceiling is per-sequence context, not batch size
 
-Those came from a **different implementation** of this architecture and are recorded as the bar
-this rewrite aims to clear — a design target, not a benchmark of this code, which does not yet
-exist. See [PROVENANCE.md](PROVENANCE.md).
+Those came from a **different implementation** of this architecture and were recorded as the bar
+this rewrite had to clear. It has: this code measured 728.71 tok/s aggregate at 48 streams on the
+same class of card and model, with the method in [docs/results/3090.md](docs/results/3090.md).
+See [PROVENANCE.md](PROVENANCE.md) for why no code carried over.
 
 ## Running
 
@@ -139,11 +147,13 @@ Images must be inlined as data URLs. Remote URLs are refused: fetching a caller-
 server-side would let anyone reach whatever the server can, including cloud metadata endpoints
 and private networks.
 
-`kv_unified` lets one request use idle capacity from other slots instead of a fixed share. It
-is **experimental, off by default, and untested under load** — admission still checks a
-per-stream ceiling that no longer reserves anything, so concurrent long requests can
-overcommit the pool and be evicted mid-answer. The tested arrangement is a fixed herd of equal
-streams.
+`kv_unified` puts every stream in one KV pool instead of giving each a fixed share. It is off by
+default, and it is the setting the 728 tok/s measurement ran under: on a 3090 with a 35B-A3B it
+was worth 182 tok/s against 55 from this flag alone. One pool means a per-stream ceiling reserves
+nothing, so the manifest refuses `kv_unified` with more than one stream unless `admit_context`
+is set, and refuses an `admit_context` that, multiplied by the stream count, exceeds the pool.
+That is what stops concurrent long requests overcommitting the pool and being evicted
+mid-answer.
 
 **Speculative decoding** comes in two forms. Both propose continuations that the target
 verifies in the same forward pass, and both are safe: a rejected proposal costs batch space and
@@ -252,10 +262,18 @@ Releases are CPU-only today; GPU builds are tracked in [LAUNCH.md](LAUNCH.md).
 
 | Document | Contents |
 |---|---|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | **Start here.** The shape of the system, the facts that constrain it, and the principles that recur |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Targets, the reasoning behind them, and the constraints in the way |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | What this ships as, the capacity model, and how a configuration is chosen for a machine |
 | [docs/INVARIANTS.md](docs/INVARIANTS.md) | Things that are true and were expensive to learn — mostly silent failures |
 | [docs/MODEL-BUILD.md](docs/MODEL-BUILD.md) | How model builds are produced and what each must carry |
+| [docs/VIRTUAL-CONTEXT.md](docs/VIRTUAL-CONTEXT.md) | The layer that accepts an input of any size |
+| [docs/DAG-SCHEDULING.md](docs/DAG-SCHEDULING.md) | Ordering within a request |
+| [docs/CODE-GRAPH.md](docs/CODE-GRAPH.md) | Code generation, code judging, and the fan-out boundary |
+| [docs/HLSR.md](docs/HLSR.md) | Hierarchical latent speculative reduction |
+| [docs/MODELS.md](docs/MODELS.md) | Auxiliary models, and the rule that decides whether one earns its place |
 | [docs/BENCHMARKING.md](docs/BENCHMARKING.md) | What each measurement means and how to reproduce it |
+| [docs/results/](docs/results/) | The measurements themselves |
 | [PROVENANCE.md](PROVENANCE.md) | Origin and chain of title |
 | [LAUNCH.md](LAUNCH.md) | What remains before this goes public |
 

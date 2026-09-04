@@ -50,7 +50,7 @@ MTP export is implemented per architecture. At the pinned revision it covers:
 | DeepSeek | yes (plus a separate DSpark draft export) |
 | Hunyuan, BailingMoE3, Step3 | yes |
 
-Three conversion modes matter:
+Four conversion modes matter:
 
 | Flag | Produces |
 |---|---|
@@ -86,7 +86,9 @@ work, and that pairing has to be carried in the manifest together.
 
 ## The pipeline
 
-Each stage has a gate. A build that fails a gate is not published.
+Each stage has a gate. A build that fails a gate is not published. `scripts/build-model.sh`
+automates `acquire`, `convert`, `imatrix` and `quantize` with the verify gates between them;
+`modify`, `measure` and `publish` are done by hand today.
 
 ```
 1. acquire    pin the source repo AND its revision — not just the repo name

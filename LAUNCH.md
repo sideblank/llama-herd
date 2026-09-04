@@ -73,8 +73,9 @@ once it is public.
 
 - [ ] Stay on `v0.x` until the engine API settles — SemVer allows breaking changes pre-1.0, and
       `1.0` is a stability promise.
-- [ ] Do not cut a first release until the runtime can actually serve a token. The binary today
-      does `version` and `doctor` only.
+- [x] Do not cut a first release until the runtime can actually serve a token. It serves, benches,
+      sweeps and holds a standby port; `version` and `doctor` are the two subcommands that need
+      no model.
 - [ ] Use prereleases (`v0.2.0-rc.1`) for anything touching the decode path — people run this on
       expensive hardware.
 - [ ] Add a `CHANGELOG.md`. Conventional commit prefixes would let it be generated; `perf:` earns
@@ -87,10 +88,16 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for the reasoning behind each.
 - [x] Engine core: decode loop, slot table, continuous batching, admission control
 - [x] Chat-completions API with streaming — the integration surface every agent uses
 - [x] Benchmark harness — `llama-herd bench`, reproducible and self-describing
-- [ ] **Run it on a real card** and publish results to `docs/results/`. Everything measured
-      so far is on a fake backend; no throughput claim is real until this happens.
-- [ ] KV quantization and a real KV budget, not a fixed slot count
-- [ ] Verify llama.cpp MTP/speculative support against a quant that retains `nextn` tensors
+- [x] **Run it on a real card** and publish results to `docs/results/`. Done on an RTX 3090:
+      `docs/results/3090.md`, 728.71 tok/s aggregate at 48 streams. The 4090 and 5090 remain
+      unmeasured.
+- [x] KV quantization — `kv_type_k` / `kv_type_v`, a sweep axis, reported on `/v1/info`,
+      measured at depth in `docs/results/3090.md`
+- [ ] A real KV budget, not a fixed slot count — today `admit_context` restores the reservation a
+      unified pool removes; admission does not yet read live pool occupancy
+- [x] Verify llama.cpp MTP/speculative support against a quant that retains `nextn` tensors —
+      it drafts (57% acceptance at `max_draft=2`) and was net-negative on throughput; see
+      `docs/ROADMAP.md` §7b for the caveat
 - [ ] Multi-GPU placement and capacity-aware routing
 
 ## Model selection
@@ -116,8 +123,9 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for the reasoning behind each.
 
 ## Ongoing
 
-- [x] Go CI — `build.yml` builds and vets on Linux, macOS and Windows.
-- [x] `-race` unit tests run in CI on all three platforms.
+- [x] Go CI — `build.yml` builds and vets on Linux and Windows. macOS was removed from the
+      per-change build for cost (above).
+- [x] `-race` unit tests run in CI on both platforms.
 - [x] Per-request sampling: temperature and friends are honoured per request, layered over
       the model's configured defaults.
 - [x] **`LLAMA_CPP_REF` pinned** to a llama.cpp release tag in both workflows. Bump deliberately
