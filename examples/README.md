@@ -48,3 +48,23 @@ acceptance it was 2.1x slower than plain decoding.
 
 `docs/INVARIANTS.md` carries the arithmetic. Measure before enabling it, and judge it on decode
 calls per token rather than on acceptance rate.
+
+## `3090-throughput.json` — the measured high-throughput profile
+
+The configuration that measured **728.71 tok/s aggregate** on one RTX 3090 with
+`Qwen3.6-35B-A3B-UD-IQ3_S`. Numbers, method and caveats: `docs/results/3090.md`.
+
+Build the image with `--build-arg GGML_CUDA_FORCE_MMQ=ON`; that was worth 7-9% and is not the
+upstream default.
+
+Three things this profile assumes, which decide whether it is the right one:
+
+- **Shallow requests.** It was measured with near-empty caches — agent swarms, short independent
+  requests, high-concurrency chat. At 16k per stream the deepest herd that fits is 24 streams, at
+  around 52 tok/s, where **8 streams beats 24 by more than 2x**. Serve deep contexts and this is the wrong profile.
+- **`admit_context` below the per-stream share.** 48 streams over 425,984 gives each 8,874, so
+  8,192 admitted leaves 682 tokens to generate into. Admit the whole share and a request that
+  fills its stream has nowhere to put its answer.
+- **`load_mtp: false`.** The head costs VRAM and speculation measured net-negative on this model,
+  so this profile does not carry it. Set it true only alongside a `speculation` block, and only
+  after measuring — see the roadmap.
