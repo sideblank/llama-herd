@@ -351,3 +351,35 @@ func TestSelftestDetectsAHerdThatDoesNotAmortise(t *testing.T) {
 			bs.TokensPerPass)
 	}
 }
+
+// phaseSplit reports the share of THIS run, so it must difference the cumulative counters.
+// Reading them absolutely would fold in warmup and any earlier traffic, which on a server that
+// had already served would report that traffic's split rather than the measurement's.
+func TestPhaseSplitDifferencesCumulativeCounters(t *testing.T) {
+	before := engine.Stats{StageNanos: 1000, DecodeNanos: 5000, HarvestNanos: 1000}
+	after := engine.Stats{StageNanos: 1100, DecodeNanos: 5800, HarvestNanos: 1100}
+
+	got := phaseSplit(before, after)
+	if got == nil {
+		t.Fatal("phaseSplit = nil, want a split")
+	}
+	// Deltas are 100 / 800 / 100 = 1000 total.
+	if got.StagePct != 10 || got.DecodePct != 80 || got.HarvestPct != 10 {
+		t.Errorf("split = %+v, want 10/80/10 — absolute counters were used instead of deltas", got)
+	}
+	if got.OverheadPct != 20 {
+		t.Errorf("OverheadPct = %v, want 20", got.OverheadPct)
+	}
+	if sum := got.StagePct + got.DecodePct + got.HarvestPct; sum < 99.99 || sum > 100.01 {
+		t.Errorf("percentages sum to %v, want 100", sum)
+	}
+}
+
+// No time measured is absence, not a split of zeros: a build without the counters would
+// otherwise publish a confident 0% overhead.
+func TestPhaseSplitIsAbsentWhenNothingMoved(t *testing.T) {
+	s := engine.Stats{StageNanos: 7, DecodeNanos: 7, HarvestNanos: 7}
+	if got := phaseSplit(s, s); got != nil {
+		t.Fatalf("phaseSplit with no delta = %+v, want nil", got)
+	}
+}

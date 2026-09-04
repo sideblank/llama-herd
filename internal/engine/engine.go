@@ -10,6 +10,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Request is one generation to run.
@@ -67,10 +68,14 @@ func (s *Stream) Close() { s.cancel() }
 type slot struct {
 	seq SeqID
 
-	pending []Token // prompt tokens not yet fed
-	pos     Pos     // next position in the sequence
-	next    Token   // token to feed on the next decode tick
-	primed  bool    // prefill finished; next holds a sampled token
+	promptToks []Token // the whole tokenised prompt, retained so a later slot can share its cached prefix
+	pending    []Token // prompt tokens not yet fed
+	// sharedPrefix is how many leading tokens this slot adopted from another sequence rather
+	// than computing. Zero when it prefilled everything itself.
+	sharedPrefix int
+	pos          Pos   // next position in the sequence
+	next         Token // token to feed on the next decode tick
+	primed       bool  // prefill finished; next holds a sampled token
 
 	generated int
 	maxTokens int
@@ -241,13 +246,14 @@ func (e *Engine) Submit(ctx context.Context, req Request) (*Stream, error) {
 
 	cctx, cancel := context.WithCancel(ctx)
 	s := &slot{
-		seq:       -1,
-		pending:   toks,
-		maxTokens: req.MaxTokens,
-		stop:      req.Stop,
-		sampling:  req.Sampling,
-		media:     req.Media,
-		prompt:    req.Prompt,
+		seq:        -1,
+		promptToks: toks,
+		pending:    toks,
+		maxTokens:  req.MaxTokens,
+		stop:       req.Stop,
+		sampling:   req.Sampling,
+		media:      req.Media,
+		prompt:     req.Prompt,
 		// Absent means follow the model's configuration; only an explicit false disables.
 		noSpeculate: req.Speculate != nil && !*req.Speculate,
 		out:         make(chan Event, 32),
@@ -397,6 +403,11 @@ func (e *Engine) admit(active map[SeqID]*slot) {
 // — or worse, overrun — the already-running streams, which is a silent engine death rather
 // than a clean error.
 func (e *Engine) tick(active map[SeqID]*slot) error {
+	// Phase clocks. The engine's throughput can only be short of the library's in one of
+	// three places, and which one it is decides the fix entirely: staging is our own Go code,
+	// decode is the library, harvest is sampling and detokenization. Guessing between them has
+	// already cost four wrong theories, so the split is measured and published instead.
+	tickStart := time.Now()
 	e.be.BatchClear()
 	budget := e.be.BatchCap()
 	if budget <= 0 {
@@ -558,6 +569,10 @@ func (e *Engine) tick(active map[SeqID]*slot) error {
 		}
 	}
 
+	// Before prefill: let a fresh slot adopt a prefix another live sequence already holds,
+	// rather than recomputing identical leading tokens. A no-op unless the backend supports it.
+	e.sharePrefixes(active)
+
 	// Pass 2 — prefill, chunked into whatever budget is left.
 	for _, s := range active {
 		if s.primed || s.ctx.Err() != nil || len(s.pending) == 0 {
@@ -595,14 +610,18 @@ func (e *Engine) tick(active map[SeqID]*slot) error {
 	if e.be.BatchLen() == 0 {
 		// A media prefill may have produced logits without staging anything in the
 		// shared batch, so there can still be slots to harvest.
+		e.c.stageNanos.Add(time.Since(tickStart).Nanoseconds())
 		return e.harvest(active)
 	}
 
+	e.c.stageNanos.Add(time.Since(tickStart).Nanoseconds())
+	decodeStart := time.Now()
 	e.c.passes.Add(1)
 	// A drafter predicting from the target's internal state must see every decode. This
 	// runs after the pass below, not before, since there is nothing to observe until the
 	// target has produced it.
 	decodeErr := e.be.Decode()
+	e.c.decodeNanos.Add(time.Since(decodeStart).Nanoseconds())
 	if ob, ok := e.drafter.(BatchObserver); ok && ob != nil && decodeErr == nil {
 		// A failure here is not fatal — the target decoded fine and the answer is correct
 		// — but it leaves the drafter predicting from stale state, which shows up only as
@@ -629,6 +648,8 @@ func (e *Engine) tick(active map[SeqID]*slot) error {
 
 // harvest samples each slot that produced logits and emits its token.
 func (e *Engine) harvest(active map[SeqID]*slot) error {
+	harvestStart := time.Now()
+	defer func() { e.c.harvestNanos.Add(time.Since(harvestStart).Nanoseconds()) }()
 	for seq, s := range active {
 		if !s.hasLogits {
 			continue
@@ -746,7 +767,14 @@ func (e *Engine) verify(s *slot) (accepted int, stop string, reason string, err 
 	eos := e.be.EOS()
 
 	for i, idx := range s.specIdx {
+		// Harvest is measured as a whole, but "harvest is expensive" is not yet a lead: it
+		// covers sampling, detokenization and handing the token to the caller, and the last
+		// of those blocks when the caller is not reading. Attributing consumer backpressure
+		// to the sampler would send the optimisation somewhere it cannot help, so the three
+		// are timed apart.
+		sampleStart := time.Now()
 		tok, sErr := e.be.SampleAt(s.seq, idx)
+		e.c.sampleNanos.Add(time.Since(sampleStart).Nanoseconds())
 		if sErr != nil {
 			return accepted, "", "", fmt.Errorf("sample: %w", sErr)
 		}
@@ -755,7 +783,9 @@ func (e *Engine) verify(s *slot) (accepted int, stop string, reason string, err 
 			return accepted, ReasonEOS, "", nil
 		}
 
+		pieceStart := time.Now()
 		piece, pErr := e.be.Piece(tok)
+		e.c.pieceNanos.Add(time.Since(pieceStart).Nanoseconds())
 		if pErr != nil {
 			return accepted, "", "", fmt.Errorf("detokenize: %w", pErr)
 		}
@@ -764,7 +794,9 @@ func (e *Engine) verify(s *slot) (accepted int, stop string, reason string, err 
 		s.generated++
 		e.c.tokens.Add(1)
 		if text, ok := s.consume(piece); ok {
+			emitStart := time.Now()
 			s.emit(Event{Text: text})
+			e.c.emitNanos.Add(time.Since(emitStart).Nanoseconds())
 		}
 
 		if s.hitStop() {

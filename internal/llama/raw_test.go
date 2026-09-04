@@ -64,7 +64,7 @@ func TestRawGeneration(t *testing.T) {
 		t.Fatalf("prefill decode: %v", err)
 	}
 
-	smpl, err := NewSampler(SamplingParams{}, vocab.NTokens())
+	smpl, err := NewSampler(SamplingParams{}, vocab.NTokens(), vocab)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestRawChatGeneration(t *testing.T) {
 		t.Fatalf("prefill decode: %v", err)
 	}
 
-	smpl, err := NewSampler(SamplingParams{}, vocab.NTokens())
+	smpl, err := NewSampler(SamplingParams{}, vocab.NTokens(), vocab)
 	if err != nil {
 		t.Fatal(err)
 	}

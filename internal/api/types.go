@@ -53,6 +53,15 @@ type ChatRequest struct {
 	PresencePenalty  *float32 `json:"presence_penalty,omitempty"`
 	RepeatPenalty    *float32 `json:"repetition_penalty,omitempty"`
 	Seed             *uint32  `json:"seed,omitempty"`
+
+	// Grammar constrains generation to a GBNF grammar, so the response is structurally valid by
+	// construction rather than by inspection afterwards.
+	//
+	// The caller that benefits most is one merging many responses: a schema-valid object per
+	// stream can be combined by code, with no parse that fails on the forty-seventh reply and no
+	// model asked to reconcile them.
+	Grammar     *string `json:"grammar,omitempty"`
+	GrammarRoot *string `json:"grammar_root,omitempty"`
 }
 
 // sampling maps the request onto the engine's neutral representation. Fields the caller
@@ -67,6 +76,8 @@ func (r ChatRequest) sampling() *engine.SamplingParams {
 		PresencePenalty: r.PresencePenalty,
 		RepeatPenalty:   r.RepeatPenalty,
 		Seed:            r.Seed,
+		Grammar:         r.Grammar,
+		GrammarRoot:     r.GrammarRoot,
 	}
 	if p.IsZero() {
 		return nil

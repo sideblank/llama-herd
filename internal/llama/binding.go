@@ -333,6 +333,10 @@ func (p ContextParams) c() C.struct_llama_context_params {
 type Context struct {
 	c   *C.struct_llama_context
 	mem C.llama_memory_t
+	// kvUnified records how this context was created. Kept because SeqCp's safety depends on
+	// it and there is no way to ask the context afterwards — and getting it wrong does not
+	// return an error, it aborts the process.
+	kvUnified bool
 }
 
 // NewContext creates a context over m.
@@ -341,7 +345,7 @@ func NewContext(m *Model, params ContextParams) (*Context, error) {
 	if c == nil {
 		return nil, errors.New("llama: could not create context")
 	}
-	return &Context{c: c, mem: C.llama_get_memory(c)}, nil
+	return &Context{c: c, mem: C.llama_get_memory(c), kvUnified: params.KVUnified}, nil
 }
 
 // Free releases the context and its KV cache.
@@ -376,6 +380,17 @@ func (ctx *Context) Decode(b *Batch) error {
 		return fmt.Errorf("%w: llama_decode returned %d", ErrDecode, rc)
 	}
 }
+
+// Synchronize waits for the work scheduled by the last Decode to finish.
+//
+// The library defers this: llama_decode queues a graph and returns, and the wait happens
+// lazily inside the first call that reads an output — llama_get_logits_ith. That is fine for
+// throughput and ruinous for attribution, because the GPU's compute time is then billed to
+// whatever asks for the logits, which in this engine is the sampler. It made sampling look like
+// half of all engine time when the sampler's own work was measured at 0.18 ms per token.
+//
+// Calling it explicitly after the decode costs nothing and puts the wait where it belongs.
+func (ctx *Context) Synchronize() { C.llama_synchronize(ctx.c) }
 
 // LogitsIth returns the logits for the i'th token of the last Decode, for the tokens whose
 // logits flag was set. The slice aliases libllama's internal buffer: it is valid only until
@@ -631,3 +646,70 @@ func (b *Batch) Add(tok Token, pos Pos, seqs []SeqID, wantLogits bool) error {
 	b.c.n_tokens++
 	return nil
 }
+
+// SeqPosMin returns the lowest position held for a sequence, or -1 if it holds nothing.
+func (ctx *Context) SeqPosMin(seq SeqID) Pos {
+	return Pos(C.llama_memory_seq_pos_min(ctx.mem, C.llama_seq_id(seq)))
+}
+
+// SeqPosMax returns the highest position held for a sequence, or -1 if it holds nothing.
+//
+// This is the only way to confirm a SeqCp took effect: llama_memory_seq_cp returns void and has a
+// path that silently does nothing (see SeqCp).
+func (ctx *Context) SeqPosMax(seq SeqID) Pos {
+	return Pos(C.llama_memory_seq_pos_max(ctx.mem, C.llama_seq_id(seq)))
+}
+
+// ErrSeqCpNeedsUnified is returned when a partial-range SeqCp is attempted on a context whose KV
+// cache is not unified.
+//
+// Not a soft failure. Upstream handles a cross-stream copy with
+// `GGML_ASSERT(is_full && "seq_cp() is only supported for full KV buffers")`, and a prefix copy is
+// by definition a partial range — so calling it would ABORT THE PROCESS rather than return an
+// error. The check has to happen on this side.
+var ErrSeqCpNeedsUnified = errors.New("llama: copying part of a sequence requires a unified KV cache; " +
+	"upstream asserts on a partial cross-stream copy and takes the process down")
+
+// ErrSeqCpNoEffect is returned when a copy reported nothing and changed nothing.
+var ErrSeqCpNoEffect = errors.New("llama: the sequence copy had no effect — the destination holds " +
+	"no positions afterwards")
+
+// SeqCp copies the KV cells of src in [p0, p1) onto dst, so dst shares that prefix without
+// recomputing it.
+//
+// This is the mechanism behind prefix reuse. With a unified cache it is a metadata operation and
+// genuinely free: upstream marks each matching cell as belonging to dst as well
+// (`cells.seq_add(i, seq_id_dst)`), with the comment *"since both sequences are in the same stream,
+// no data copy is necessary"*. The prefix is computed once and every destination sequence attends
+// to the same cells.
+//
+// Three reasons this wrapper exists rather than calling the C function directly:
+//
+//  1. It returns void. There is no failure signal at all.
+//  2. It has a path that silently does nothing — an early `if (other) { return; }`.
+//  3. Without a unified cache a partial copy hits a GGML_ASSERT and aborts the process.
+//
+// So the precondition is enforced before the call and the effect is verified after it. Passing -1
+// for p0 means the start and -1 for p1 means the end.
+func (ctx *Context) SeqCp(src, dst SeqID, p0, p1 Pos) error {
+	if src == dst {
+		return nil
+	}
+	partial := p0 > 0 || p1 >= 0
+	if partial && !ctx.kvUnified {
+		return ErrSeqCpNeedsUnified
+	}
+	C.llama_memory_seq_cp(ctx.mem, C.llama_seq_id(src), C.llama_seq_id(dst),
+		C.llama_pos(p0), C.llama_pos(p1))
+	// Verify, because none of the failure paths above would have said anything.
+	if ctx.SeqPosMax(dst) < 0 {
+		return ErrSeqCpNoEffect
+	}
+	return nil
+}
+
+// KVUnified reports whether this context was created with one shared attention buffer.
+//
+// Load-bearing in two independent ways: it is what lets the herd amortise a decode pass across
+// sequences, and it is the precondition for SeqCp on a partial range.
+func (ctx *Context) KVUnified() bool { return ctx.kvUnified }

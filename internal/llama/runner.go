@@ -38,6 +38,10 @@ type Runner struct {
 	thinkPrime string
 	// ckptLogged keeps the snapshot-size report to once per process.
 	ckptLogged bool
+	// ownsModel records whether Close should free the weights. A sweep holds one copy of the
+	// weights across many contexts, and freeing them with the first context would make each
+	// configuration pay a fresh load — which is the entire cost the sweep exists to avoid.
+	ownsModel bool
 
 	nVocab int32
 	eos    Token
@@ -109,10 +113,24 @@ func OpenRunner(cfg RunnerConfig) (*Runner, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	ctx, err := NewContext(m, cfg.Context)
+	r, err := OpenRunnerWithModel(m, cfg)
 	if err != nil {
 		m.Free()
+		return nil, err
+	}
+	r.ownsModel = true
+	return r, nil
+}
+
+// OpenRunnerWithModel prepares a runner over weights the caller already loaded and continues to
+// own. Closing the runner leaves the model alive.
+//
+// This is what makes a configuration sweep affordable: loading a 14 GiB model takes longer than
+// measuring it, so a sweep that reloaded per configuration would spend nearly all its time on
+// the part that does not vary.
+func OpenRunnerWithModel(m *Model, cfg RunnerConfig) (*Runner, error) {
+	ctx, err := NewContext(m, cfg.Context)
+	if err != nil {
 		return nil, err
 	}
 
@@ -152,7 +170,7 @@ func OpenRunner(cfg RunnerConfig) (*Runner, error) {
 	}
 
 	for i := range r.samplers {
-		s, err := NewSampler(cfg.Sampling, nVocab)
+		s, err := NewSampler(cfg.Sampling, nVocab, vocab)
 		if err != nil {
 			r.Close()
 			return nil, fmt.Errorf("sampler %d: %w", i, err)
@@ -209,10 +227,15 @@ func (r *Runner) Close() {
 		r.ctx = nil
 	}
 	if r.model != nil {
-		r.model.Free()
+		if r.ownsModel {
+			r.model.Free()
+		}
 		r.model = nil
 	}
 }
+
+// Model exposes the loaded weights so a caller can build further runners over them.
+func (r *Runner) Model() *Model { return r.model }
 
 // HasVision reports whether this model can accept images.
 func (r *Runner) HasVision() bool { return r.vision != nil }
@@ -336,6 +359,9 @@ func (r *Runner) Decode() error {
 	err := r.ctx.Decode(r.batch)
 	switch {
 	case err == nil:
+		// Wait here rather than letting the first logit read do it, so the forward pass is
+		// timed as the forward pass. See Context.Synchronize.
+		r.ctx.Synchronize()
 		return nil
 	case err == ErrNoKVSlot:
 		// Translate rather than wrap, so the scheduler's recovery path matches on its
@@ -369,7 +395,7 @@ func (r *Runner) SetSampling(seq engine.SeqID, p *engine.SamplingParams) error {
 		if !r.custom[i] {
 			return nil // already on the default chain
 		}
-		s, err := NewSampler(r.defaultSampling, r.nVocab)
+		s, err := NewSampler(r.defaultSampling, r.nVocab, r.vocab)
 		if err != nil {
 			return err
 		}
@@ -398,6 +424,12 @@ func (r *Runner) SetSampling(seq engine.SeqID, p *engine.SamplingParams) error {
 	if p.RepeatPenalty != nil {
 		merged.RepeatPenalty = *p.RepeatPenalty
 	}
+	if p.Grammar != nil {
+		merged.Grammar = *p.Grammar
+	}
+	if p.GrammarRoot != nil {
+		merged.GrammarRoot = *p.GrammarRoot
+	}
 	if p.FreqPenalty != nil {
 		merged.FreqPenalty = *p.FreqPenalty
 	}
@@ -408,7 +440,7 @@ func (r *Runner) SetSampling(seq engine.SeqID, p *engine.SamplingParams) error {
 		merged.Seed = *p.Seed
 	}
 
-	s, err := NewSampler(merged, r.nVocab)
+	s, err := NewSampler(merged, r.nVocab, r.vocab)
 	if err != nil {
 		return err
 	}

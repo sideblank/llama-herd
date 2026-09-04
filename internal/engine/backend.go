@@ -37,6 +37,12 @@ type SamplingParams struct {
 	FreqPenalty     *float32
 	PresencePenalty *float32
 	Seed            *uint32
+	// Grammar constrains generation to a GBNF grammar, making output structurally valid by
+	// construction. This is what allows many streams to be merged by code rather than by asking
+	// a model to reconcile them.
+	Grammar *string
+	// GrammarRoot names the grammar's start symbol. Defaults to "root".
+	GrammarRoot *string
 }
 
 // IsZero reports whether nothing was specified, in which case the model's configured
@@ -44,7 +50,8 @@ type SamplingParams struct {
 func (p *SamplingParams) IsZero() bool {
 	return p == nil || (p.Temperature == nil && p.TopK == nil && p.TopP == nil &&
 		p.MinP == nil && p.RepeatLastN == nil && p.RepeatPenalty == nil &&
-		p.FreqPenalty == nil && p.PresencePenalty == nil && p.Seed == nil)
+		p.FreqPenalty == nil && p.PresencePenalty == nil && p.Seed == nil &&
+		p.Grammar == nil && p.GrammarRoot == nil)
 }
 
 // MediaBackend is implemented by backends that accept images or audio.

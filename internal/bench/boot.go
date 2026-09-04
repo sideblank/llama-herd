@@ -48,10 +48,42 @@ type Selftest struct {
 	// is how a throughput figure becomes uncheckable.
 	PromptTokPerSec float64 `json:"prompt_tok_per_sec,omitempty"`
 
+	// Phases says where the engine's wall clock went during the measured run: the library's
+	// forward pass against this engine's own staging and harvesting.
+	//
+	// It is what turns "we are 15% short of the library's own rate" from a fact into a lead.
+	// Short of the library, the missing time is in staging or harvesting, and Overhead is the
+	// most any amount of tuning here could recover.
+	Phases *PhaseSplit `json:"phases,omitempty"`
+
 	GenTokens   int     `json:"gen_tokens_per_stream"`
 	LlamaCppRef string  `json:"llama_cpp_ref"`
 	TookSeconds float64 `json:"took_seconds"`
 	Note        string  `json:"note,omitempty"`
+}
+
+// PhaseSplit is the share of engine time spent in each phase of a pass, as percentages that
+// sum to 100.
+//
+// Decode is the library's work and would be paid by any caller of it. Stage and Harvest are
+// this engine's, and are the only parts optimising this repo can move — so Overhead bounds the
+// gain available before the library itself has to change.
+type PhaseSplit struct {
+	// StagePct is choosing slots and filling the batch.
+	StagePct float64 `json:"stage_pct"`
+	// DecodePct is the library's forward pass.
+	DecodePct float64 `json:"decode_pct"`
+	// HarvestPct is sampling, detokenization and delivery.
+	HarvestPct float64 `json:"harvest_pct"`
+	// SamplePct, PiecePct and EmitPct break HarvestPct down. They matter separately because
+	// only the first two are this engine's work: EmitPct is time blocked handing tokens to a
+	// caller that is not reading them, and a large value there means the consumer is the
+	// bottleneck, not the sampler. The remainder of HarvestPct is slot bookkeeping.
+	SamplePct float64 `json:"sample_pct"`
+	PiecePct  float64 `json:"piece_pct"`
+	EmitPct   float64 `json:"emit_pct"`
+	// OverheadPct is StagePct plus HarvestPct: this engine's own cost.
+	OverheadPct float64 `json:"overhead_pct"`
 }
 
 // RunSelftest measures the engine at its configured stream count, briefly, before it serves.
@@ -79,12 +111,17 @@ func RunSelftest(ctx context.Context, eng *engine.Engine, streams int, genTokens
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 
+	// Phase clocks are cumulative over the engine's life, so the split for THIS run is the
+	// difference across it. Reading them absolutely would blend in the warmup and anything
+	// else the engine had already done.
+	before := eng.Stats()
 	res, err := Run(ctx, eng, Config{
 		Prompt:  selftestPrompt,
 		Streams: streams,
 		Tokens:  genTokens,
 		Warmup:  4,
 	})
+	st.Phases = phaseSplit(before, eng.Stats())
 	if err != nil {
 		st.TookSeconds = time.Since(start).Seconds()
 		if ctx.Err() != nil {
@@ -140,6 +177,29 @@ func RunSelftest(ctx context.Context, eng *engine.Engine, streams int, genTokens
 	}
 	st.TookSeconds = time.Since(start).Seconds()
 	return st
+}
+
+// phaseSplit turns two cumulative counter snapshots into the shares spent in each phase.
+// Returns nil when nothing was measured between them, so a build without the counters or a run
+// that did nothing reports absence rather than three zeros that look like a finding.
+func phaseSplit(before, after engine.Stats) *PhaseSplit {
+	stage := after.StageNanos - before.StageNanos
+	decode := after.DecodeNanos - before.DecodeNanos
+	harvest := after.HarvestNanos - before.HarvestNanos
+	total := stage + decode + harvest
+	if total == 0 {
+		return nil
+	}
+	pct := func(n uint64) float64 { return float64(n) / float64(total) * 100 }
+	return &PhaseSplit{
+		StagePct:    pct(stage),
+		DecodePct:   pct(decode),
+		HarvestPct:  pct(harvest),
+		OverheadPct: pct(stage + harvest),
+		SamplePct:   pct(after.SampleNanos - before.SampleNanos),
+		PiecePct:    pct(after.PieceNanos - before.PieceNanos),
+		EmitPct:     pct(after.EmitNanos - before.EmitNanos),
+	}
 }
 
 // DefaultSelftestBudget bounds how long startup may spend measuring itself. A healthy GPU

@@ -32,8 +32,17 @@ type Server struct {
 	// changed library from a slow engine without running anything.
 	references map[string]any
 	// libBench is llama-bench's reading of the same model, taken at startup.
-	libBench string
+	libBench       string
+	samplerProfile func() *SamplerProfile
+	sweep          json.RawMessage
+	// host reads the machine's current state. Injectable because it is ambient: a test that
+	// asserts on the warnings would otherwise depend on the load of whatever machine ran it,
+	// passing when idle and failing under a parallel build. nil means read the real host.
+	host func() hostinfo.Host
 }
+
+// SetHostReader overrides how the server reads machine state. For tests.
+func (s *Server) SetHostReader(f func() hostinfo.Host) { s.host = f }
 
 // BuildInfo describes the running binary.
 type BuildInfo struct {
@@ -142,10 +151,16 @@ type Info struct {
 	// serving. It measures the library where selftest measures this engine, and the pair is
 	// what tells a slow substrate from a herd that is not amortising. Absent unless asked
 	// for, since it costs startup time.
-	LibraryBench string        `json:"library_bench,omitempty"`
-	Host         hostinfo.Host `json:"host"`
-	Devices      []DeviceInfo  `json:"devices"`
-	Models       []ModelStatus `json:"models"`
+	LibraryBench string `json:"library_bench,omitempty"`
+	// Sampler is where time inside the sampler went. Absent unless the runtime supplies it.
+	Sampler *SamplerProfile `json:"sampler,omitempty"`
+	// Sweep is a configuration matrix measured before serving, verbatim as the sweep emitted
+	// it. Absent unless one was run. Published here because the hosts this runs on give no
+	// way to read a container's stdout.
+	Sweep   json.RawMessage `json:"sweep,omitempty"`
+	Host    hostinfo.Host   `json:"host"`
+	Devices []DeviceInfo    `json:"devices"`
+	Models  []ModelStatus   `json:"models"`
 }
 
 // ModelStatus is one model's configuration and live utilisation.
@@ -188,6 +203,28 @@ type Placement struct {
 	MTPLoaded     bool   `json:"mtp_loaded"`
 }
 
+// SamplerProfile splits time inside the sampler between narrowing the candidate set and
+// running the library's chain over it.
+//
+// AvgCandidates is the check that matters: it says how many entries the chain was actually
+// given. A value equal to the vocabulary means narrowing is not happening, however confidently
+// the configuration suggests it should be — which is the difference between a measurement and
+// an assumption.
+type SamplerProfile struct {
+	SelectMsPerToken float64 `json:"select_ms_per_token"`
+	ApplyMsPerToken  float64 `json:"apply_ms_per_token"`
+	AvgCandidates    float64 `json:"avg_candidates"`
+	Calls            int64   `json:"calls"`
+}
+
+// WithSamplerProfile supplies a source for the sampler breakdown, read at request time so it
+// reflects traffic rather than only startup. Passed as a function because the sampler lives
+// behind cgo and this package must build without it.
+func (s *Server) WithSamplerProfile(fn func() *SamplerProfile) *Server {
+	s.samplerProfile = fn
+	return s
+}
+
 // WithLibraryBench records llama-bench's own reading of this model, taken before serving.
 //
 // It measures the library rather than this engine, which is the comparison that says whether a
@@ -195,6 +232,9 @@ type Placement struct {
 // output, in the format published figures use, and reformatting it would only invite doubt
 // about whether it is really that tool's number.
 func (s *Server) WithLibraryBench(out string) *Server { s.libBench = out; return s }
+
+// WithSweep records a configuration sweep taken before serving.
+func (s *Server) WithSweep(raw []byte) *Server { s.sweep = raw; return s }
 
 // WithSelftest records what a model measured at startup, for reporting on /v1/info.
 //
@@ -217,7 +257,11 @@ type PlacementSource interface {
 func (s *Server) snapshot() Info {
 	var in Info
 	in.Build = s.build
-	in.Host = hostinfo.Read()
+	if s.host != nil {
+		in.Host = s.host()
+	} else {
+		in.Host = hostinfo.Read()
+	}
 
 	if s.devices != nil {
 		in.Devices = s.devices()
@@ -251,6 +295,10 @@ func (s *Server) snapshot() Info {
 	// severity: no accelerator at all, then an accelerator the weights never reached,
 	// then a machine too busy to use what it has.
 	in.LibraryBench = s.libBench
+	in.Sweep = s.sweep
+	if s.samplerProfile != nil {
+		in.Sampler = s.samplerProfile()
+	}
 
 	switch offloaded, total := placementSummary(in.Models); {
 	case !in.Accelerated:

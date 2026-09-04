@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"github.com/sideblank/llama-herd/internal/hostinfo"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -371,6 +372,7 @@ func TestInfoReportsGPUWhenPresent(t *testing.T) {
 		WithDevices(func() []DeviceInfo {
 			return []DeviceInfo{{Index: 0, Name: "Test GPU", Type: "gpu", TotalBytes: 24 << 30}}
 		})
+	srv.SetHostReader(idleHost)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -498,6 +500,7 @@ func TestModelOnGPUProducesNoWarning(t *testing.T) {
 		WithPlacement("m", func() Placement {
 			return Placement{GPULayersRequested: -1, LayersTotal: 32, OnGPU: true}
 		})
+	srv.SetHostReader(idleHost)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -577,4 +580,13 @@ func TestModelWithoutReasoningIsRenderedUnchanged(t *testing.T) {
 	if got != "plain" || p.calls != 1 {
 		t.Fatalf("rendered %q with %d calls, want the ordinary rendering", got, p.calls)
 	}
+}
+
+// idleHost is a machine doing nothing.
+//
+// Injected wherever a test asserts on warnings, because host load is AMBIENT: reading the real
+// machine makes the assertion pass on an idle box and fail under a parallel build, which is a test
+// that reports the tester's load rather than the code's behaviour.
+func idleHost() hostinfo.Host {
+	return hostinfo.Host{OS: "linux", Arch: "amd64", CPUs: 8, LoadAvg1: 0.1, LoadAvg5: 0.1, LoadAvg15: 0.1}
 }

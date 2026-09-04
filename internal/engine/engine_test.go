@@ -391,3 +391,83 @@ func TestAdmissionCapIsEnforcedBelowTheAllocation(t *testing.T) {
 		t.Fatalf("the same prompt should fit the allocation with no cap: %v", err)
 	}
 }
+
+// The phase clocks exist to answer where this engine's time goes against the library's. A
+// counter that compiles but never increments would report a confident 0% overhead — the most
+// misleading possible reading — so assert all three actually move under real work.
+func TestPhaseClocksRecordEveryPhase(t *testing.T) {
+	f := newFake(2, 32)
+	f.script[0] = []Token{'h', 'i'}
+	e := New(f, Config{})
+	defer run(t, e)()
+
+	if got := e.Stats(); got.StageNanos != 0 || got.DecodeNanos != 0 || got.HarvestNanos != 0 {
+		t.Fatalf("clocks non-zero before any work: %+v", got)
+	}
+
+	s, err := e.Submit(context.Background(), Request{Prompt: "go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := collect(t, s); text != "hi" {
+		t.Fatalf("text = %q, want %q", text, "hi")
+	}
+
+	st := e.Stats()
+	for _, c := range []struct {
+		name string
+		got  uint64
+	}{
+		{"StageNanos", st.StageNanos},
+		{"DecodeNanos", st.DecodeNanos},
+		{"HarvestNanos", st.HarvestNanos},
+	} {
+		if c.got == 0 {
+			t.Errorf("%s = 0 after a completed generation; the phase is not being timed", c.name)
+		}
+	}
+
+	// The fraction has to be a fraction. A bug that double-counts one phase into the total
+	// would still leave every counter non-zero.
+	if f := st.OverheadFraction(); f <= 0 || f >= 1 {
+		t.Errorf("OverheadFraction = %v, want strictly between 0 and 1", f)
+	}
+}
+
+// Zero measured time must report as absence, not as an overhead of zero. A build where the
+// counters were never wired would otherwise publish "0% overhead" as a finding.
+func TestOverheadFractionIsZeroWhenNothingMeasured(t *testing.T) {
+	if got := (Stats{}).OverheadFraction(); got != 0 {
+		t.Fatalf("OverheadFraction on empty stats = %v, want 0", got)
+	}
+}
+
+// The harvest sub-clocks decide where an expensive harvest actually is. If emit is not timed
+// apart from sampling, time spent blocked on a caller that is not reading is charged to the
+// sampler, and the optimisation goes somewhere it cannot help.
+func TestHarvestSubClocksAreTimedSeparately(t *testing.T) {
+	f := newFake(2, 32)
+	f.script[0] = []Token{'h', 'i'}
+	e := New(f, Config{})
+	defer run(t, e)()
+
+	s, err := e.Submit(context.Background(), Request{Prompt: "go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text, _ := collect(t, s); text != "hi" {
+		t.Fatalf("text = %q, want %q", text, "hi")
+	}
+
+	st := e.Stats()
+	if st.SampleNanos == 0 {
+		t.Error("SampleNanos = 0 after generating tokens")
+	}
+	if st.PieceNanos == 0 {
+		t.Error("PieceNanos = 0 after generating tokens")
+	}
+	// The parts cannot exceed the whole they were measured inside.
+	if sum := st.SampleNanos + st.PieceNanos + st.EmitNanos; sum > st.HarvestNanos {
+		t.Errorf("sample+piece+emit = %d exceeds harvest = %d", sum, st.HarvestNanos)
+	}
+}
