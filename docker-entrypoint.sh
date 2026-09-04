@@ -27,6 +27,20 @@
 #                            measures THIS ENGINE across its configured streams. Having both
 #                            from one boot, on one card, is what separates a library that is
 #                            slow from a herd that is not amortising.
+#   LLAMA_HERD_LIBBENCH_TIMEOUT  seconds before the library bench is killed (default: 900).
+#                            It runs before the server binds and holds the card exclusively, so
+#                            it is capped: the deployment serves with no library figure rather
+#                            than not at all.
+#   LLAMA_HERD_LIBBENCH_REPS repetitions per test for the library bench (default: 2)
+#   LLAMA_HERD_STANDBY       set to "0" to skip holding the port during preparation
+#                            (default: 1). While preparing, /health answers 200 and every
+#                            other path answers 503 with the current phase, so a long boot is
+#                            not mistaken for an unhealthy instance and can be watched.
+#   LLAMA_HERD_SWEEP         sweep arguments, e.g. "--streams 4,6,8 --reps 2". When set, a
+#                            configuration matrix is measured against one resident copy of the
+#                            weights before serving, and published on /v1/info. Empty (the
+#                            default) skips it.
+#   LLAMA_HERD_SWEEP_TIMEOUT seconds before the sweep is killed (default: 2400)
 #   LLAMA_HERD_SELFTEST      set to "off" to skip the startup measurement (default: on).
 #                            It runs the engine at its configured stream count for a few
 #                            seconds and publishes the result on /v1/info, which is the only
@@ -41,6 +55,40 @@
 set -euo pipefail
 
 MANIFEST=${LLAMA_HERD_MANIFEST:-/etc/llama-herd/manifest.json}
+BOOT_STATUS=/tmp/boot-status
+STANDBY_PID=""
+
+# Report what the boot is doing, to stdout and to the endpoint standby serves.
+#
+# The second half is what matters on a host with no log access: without it a boot that takes
+# most of an hour is indistinguishable from one that has hung, which cost several wasted waits
+# before it was worth fixing.
+boot_phase() {
+  echo "entrypoint: $1"
+  printf '%s' "$1" > "$BOOT_STATUS" 2>/dev/null || true
+}
+
+# Hold the port so the platform's health check succeeds while the model is being fetched.
+#
+# Without this the instance is declared unhealthy minutes into a download that takes far
+# longer, and is replaced — discarding the download and starting again. Observed twice in one
+# night on boots that were otherwise progressing normally.
+start_standby() {
+  [ "${LLAMA_HERD_STANDBY:-1}" = "1" ] || return 0
+  llama-herd standby --addr "${LLAMA_HERD_STANDBY_ADDR:-:8080}" --status "$BOOT_STATUS" &
+  STANDBY_PID=$!
+}
+
+# Release the port and wait for it to actually be free, since the real server binds next and a
+# half-released listener would fail the bind rather than the health check.
+stop_standby() {
+  [ -n "$STANDBY_PID" ] || return 0
+  kill "$STANDBY_PID" 2>/dev/null || true
+  wait "$STANDBY_PID" 2>/dev/null || true
+  STANDBY_PID=""
+  sleep 1
+}
+trap 'stop_standby' EXIT
 
 # Only "serve" needs a model. version and doctor must run without one — doctor especially,
 # since diagnosing a container that cannot start is precisely when it is wanted.
@@ -54,6 +102,9 @@ if [ ! -f "$MANIFEST" ]; then
     echo "            Mount a manifest or set LLAMA_HERD_MODEL_URL to a GGUF." >&2
     exit 2
   fi
+
+  start_standby
+  boot_phase "fetching the model"
 
   mkdir -p /models "$(dirname "$MANIFEST")"
   model_file="/models/$(basename "${LLAMA_HERD_MODEL_URL%%\?*}")"
@@ -123,15 +174,28 @@ if [ ! -f "$MANIFEST" ]; then
 
   # The library's own measurement, for comparison against ours. Reported in llama-bench's
   # format so it can also be checked against published figures for this model and quant.
+  boot_phase "measuring the library with llama-bench"
   if [ "${LLAMA_HERD_LIBBENCH:-0}" = "1" ] && [ -x /opt/llama-herd/bin/llama-bench ]; then
     echo "entrypoint: measuring the library with llama-bench (this is not the engine)"
-    /opt/llama-herd/bin/llama-bench \
+    # Hard-capped, because this runs BEFORE the server binds and holds the card exclusively.
+    # A diagnostic must never be able to stop the service from starting: if the bench does not
+    # finish in the budget it is killed and the deployment serves without a library figure.
+    # Observed once at over 80 minutes on a rented node with no way to read stdout, which is
+    # indistinguishable from a hang by any check available from outside.
+    timeout -k 30 "${LLAMA_HERD_LIBBENCH_TIMEOUT:-900}" \
+      /opt/llama-herd/bin/llama-bench \
       -m "$model_file" \
-      -p 512 -n 128 -r 3 \
+      -p 512 -n 128 -r "${LLAMA_HERD_LIBBENCH_REPS:-2}" \
       -ngl "${LLAMA_HERD_GPU_LAYERS:--1}" \
       -ctk "${LLAMA_HERD_KV_TYPE_K:-f16}" -ctv "${LLAMA_HERD_KV_TYPE_V:-f16}" \
-      -fa "${LLAMA_HERD_FLASH_ATTN:-auto}" > /tmp/libbench.txt 2>&1 || \
-      echo "llama-bench failed" >> /tmp/libbench.txt
+      -fa "${LLAMA_HERD_FLASH_ATTN:-auto}" > /tmp/libbench.txt 2>&1
+    rc=$?
+    if [ $rc -eq 124 ] || [ $rc -eq 137 ]; then
+      echo "llama-bench exceeded ${LLAMA_HERD_LIBBENCH_TIMEOUT:-900}s and was killed; serving without it" \
+        >> /tmp/libbench.txt
+    elif [ $rc -ne 0 ]; then
+      echo "llama-bench failed (exit $rc)" >> /tmp/libbench.txt
+    fi
     sed 's/^/  libbench: /' /tmp/libbench.txt
     # Also kept on disk and pointed at by an environment variable, because a hosted runtime
     # may give no way to read a container's stdout — which makes a measurement that only logs
@@ -161,6 +225,33 @@ if [ ! -f "$MANIFEST" ]; then
 JSON
   echo "entrypoint: wrote $MANIFEST"
   cat "$MANIFEST"
+
+  # A configuration sweep, if one was asked for. It runs before serving because it needs the
+  # card to itself, and it reuses one resident copy of the weights across every configuration —
+  # which is the point, since getting the model onto a rented machine costs 50 to 85 minutes
+  # against seconds of measuring.
+  #
+  # Results are published on /v1/info rather than only logged, because the hosts this runs on
+  # offer no way to read a container's stdout, and a sweep that can only be logged is
+  # unavailable exactly where it was needed.
+  if [ -n "${LLAMA_HERD_SWEEP:-}" ]; then
+    boot_phase "sweeping configurations ($LLAMA_HERD_SWEEP)"
+    echo "entrypoint: sweeping configurations ($LLAMA_HERD_SWEEP)"
+    # shellcheck disable=SC2086
+    timeout -k 30 "${LLAMA_HERD_SWEEP_TIMEOUT:-2400}" \
+      llama-herd sweep --manifest "$MANIFEST" --json /tmp/sweep.json $LLAMA_HERD_SWEEP \
+      2>&1 | sed 's/^/  sweep: /'
+    rc=${PIPESTATUS[0]}
+    if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+      echo "sweep exceeded ${LLAMA_HERD_SWEEP_TIMEOUT:-2400}s and was killed" > /tmp/sweep-note.txt
+    elif [ "$rc" -ne 0 ]; then
+      echo "sweep failed (exit $rc)" > /tmp/sweep-note.txt
+    fi
+    [ -f /tmp/sweep.json ] && export LLAMA_HERD_SWEEP_FILE=/tmp/sweep.json
+  fi
+
+  boot_phase "starting the server"
+  stop_standby
 fi
 
 exec llama-herd "$@"

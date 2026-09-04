@@ -1,0 +1,4 @@
+root   ::= "{" ws "\"system\":" ws string "," ws "\"port\":" ws number ws "}"
+string ::= "\"" [a-zA-Z0-9 ]* "\""
+number ::= [0-9]+
+ws     ::= " "?

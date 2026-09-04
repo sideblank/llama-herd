@@ -228,7 +228,10 @@ WORKDIR /opt/llama-herd
 
 EXPOSE 8080
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
+# The start period covers a first boot that has to fetch the model before it can serve. The
+# standby listener answers /health throughout that, so this mainly guards the case where
+# standby itself is disabled.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=1800s --retries=3 \
   CMD curl -fsS http://localhost:8080/health || exit 1
 
 ENTRYPOINT ["docker-entrypoint.sh"]

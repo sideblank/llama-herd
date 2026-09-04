@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/sideblank/llama-herd/internal/bench"
 	"github.com/sideblank/llama-herd/internal/llama"
 )
 
@@ -95,6 +96,29 @@ func fitCmd(args []string) int {
 		fmt.Printf("  the rest use linear attention, whose state is constant-size and does not grow with context\n")
 	}
 	fmt.Println()
+	// What was actually measured on this card, when anything was.
+	//
+	// A fit calculation says what will physically load; it says nothing about what runs well.
+	// Printing the measured configuration beside it is the difference between "this fits" and
+	// "this is the arrangement that was fastest, and here is where it stopped being faster".
+	if ref, ok := bench.ReferenceFor(*card); ok {
+		fmt.Printf("  measured on this card: %d streams x %d context = %.0f tok/s aggregate "+
+			"(%.2fx the library's own %.0f tok/s on the same boot)\n",
+			ref.Streams, ref.ContextPerStream(), ref.AggregateTokPerSec, ref.Amortisation(),
+			ref.LibraryTokPerSec)
+		fmt.Printf("    %s %s, llama.cpp %s", ref.Model, ref.Quant, ref.LlamaCppRef)
+		if ref.ForceMMQ {
+			fmt.Printf(", built with GGML_CUDA_FORCE_MMQ=ON")
+		}
+		fmt.Println()
+		fmt.Printf("    %d streams peaked at %.0f tok/s (+%.0f%%) and %d collapsed — past the "+
+			"shipped setting the gain is small and the cliff is close\n",
+			ref.PeakStreams, ref.PeakTokPerSec,
+			(ref.PeakTokPerSec/ref.AggregateTokPerSec-1)*100, ref.CliffStreams)
+		fmt.Printf("    %s\n", ref.DepthNote)
+		fmt.Println()
+	}
+
 	fmt.Printf("  card %s: %s VRAM\n", *card, llama.GiB(int64(vram)))
 	fmt.Printf("  weights: %s   reserved for compute: %s\n",
 		llama.GiB(st.Size()), llama.GiB(llama.DefaultOverhead))

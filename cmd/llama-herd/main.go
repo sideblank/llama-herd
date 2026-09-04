@@ -39,10 +39,28 @@ usage:
                          host the manifest's models over an OpenAI-compatible API
   llama-herd bench --manifest <file> [--model <name>] [--streams 1,2,4,8]
                          measure throughput and emit a reproducible report
+  llama-herd sweep --manifest <file> [--streams 4,6,8] [--kv q8_0/q8_0,q8_0/q4_0]
+                         measure a matrix of configurations against one resident copy of
+                         the weights, so a rented card pays the model load once
+  llama-herd models [--all]
+                         list the models this machine can install, and why the rest cannot
   llama-herd inspect [--all] <model.gguf>
                          report what a model file declares, including MTP layers
   llama-herd fit [--card 3090] [--streams 4] [--context 128k] <model.gguf>
                          report what streams x context actually fit on a card
+  llama-herd tasks --request <text> [--dry-run] [--streams 8]
+                         decompose a request into a task graph, run it in dependency order,
+                         and assemble the answer; --dry-run prints the plan and stops
+  llama-herd vcontext --doc <file> [--query <q>] [--streams 8]
+                         process an input of any size across streams and merge the results
+  llama-herd canon --model <gguf> --doc <file> [--json]
+                         measure what each canonicalisation pass costs in real tokens
+  llama-herd latent-probe --model <small.gguf> [--control] [--as-tokens] [--scale 1.0]
+                         test whether a chunk's final hidden state can seed a grounded
+                         generation, the premise HLSR rests on
+  llama-herd standby [--addr :8080] [--status <file>]
+                         hold the port and report boot progress, so a long preparation is
+                         not mistaken for an unhealthy instance
   llama-herd version     print version and build information
   llama-herd doctor      verify linkage and list the devices it can see
 
@@ -66,6 +84,27 @@ func main() {
 
 	case "bench":
 		os.Exit(benchCmd(flag.Args()[1:]))
+
+	case "sweep":
+		os.Exit(sweep(flag.Args()[1:]))
+
+	case "standby":
+		os.Exit(standby(flag.Args()[1:]))
+
+	case "latent-probe":
+		os.Exit(latentProbe(flag.Args()[1:]))
+
+	case "vcontext":
+		os.Exit(vcontextCmd(flag.Args()[1:]))
+
+	case "tasks":
+		os.Exit(tasksCmd(flag.Args()[1:]))
+
+	case "canon":
+		os.Exit(canonCmd(flag.Args()[1:]))
+
+	case "models":
+		os.Exit(modelsCmd(flag.Args()[1:]))
 
 	case "inspect":
 		os.Exit(inspect(flag.Args()[1:]))

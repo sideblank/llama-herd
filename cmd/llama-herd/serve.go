@@ -5,9 +5,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/sideblank/llama-herd/internal/bench"
 	"log"
 	"net/http"
 	"os"
@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/sideblank/llama-herd/internal/api"
+	"github.com/sideblank/llama-herd/internal/bench"
 	"github.com/sideblank/llama-herd/internal/draft"
 	"github.com/sideblank/llama-herd/internal/engine"
 	"github.com/sideblank/llama-herd/internal/llama"
@@ -289,6 +290,15 @@ func serve(args []string) int {
 		}
 	}
 
+	// A configuration sweep taken before serving, for the same reason: on a host with no log
+	// access, a measurement that is only printed is a measurement that was not taken.
+	var sweepRaw []byte
+	if p := os.Getenv("LLAMA_HERD_SWEEP_FILE"); p != "" {
+		if b, err := os.ReadFile(p); err == nil && json.Valid(b) {
+			sweepRaw = b
+		}
+	}
+
 	selftests := map[string]bench.Selftest{}
 	if os.Getenv("LLAMA_HERD_SELFTEST") != "off" {
 		for _, mm := range mf.Models {
@@ -315,6 +325,19 @@ func serve(args []string) int {
 	apiSrv := api.New(reg).
 		WithBuild(api.BuildInfo{Version: version, Commit: commit, LlamaCppRef: llamaCppRef}).
 		WithLibraryBench(libBench).
+		WithSweep(sweepRaw).
+		WithSamplerProfile(func() *api.SamplerProfile {
+			selNs, applyNs, calls, kept := llama.SamplerTimings()
+			if calls == 0 {
+				return nil
+			}
+			return &api.SamplerProfile{
+				SelectMsPerToken: float64(selNs) / float64(calls) / 1e6,
+				ApplyMsPerToken:  float64(applyNs) / float64(calls) / 1e6,
+				AvgCandidates:    float64(kept) / float64(calls),
+				Calls:            calls,
+			}
+		}).
 		WithDevices(func() []api.DeviceInfo {
 			var out []api.DeviceInfo
 			for _, d := range llama.Devices() {

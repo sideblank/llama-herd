@@ -1,0 +1,20 @@
+{
+  "listen": ":8080",
+  "models": [
+    {
+      "name": "chat",
+      "path": "/models/Qwen3.6-35B-A3B-UD-IQ3_S.gguf",
+      "gpu_layers": -1,
+      "context": 425984,
+      "batch": 2048,
+      "streams": 48,
+      "admit_context": 8192,
+      "kv_unified": true,
+      "kv_type_k": "q8_0",
+      "kv_type_v": "q8_0",
+      "flash_attention": true,
+      "load_mtp": false,
+      "max_queue": 128
+    }
+  ]
+}
