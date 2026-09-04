@@ -1,7 +1,8 @@
 # Launch checklist
 
-Everything that must be true before `sideblank/llama-herd` is flipped public. Items are
-grouped by their real deadline, which is not always "at launch".
+Everything that had to be true before `sideblank/llama-herd` went public, which it did on
+2026-09-04, and what remains after. Items are grouped by their real deadline, which is not always
+"at launch".
 
 ---
 
@@ -61,14 +62,14 @@ once it is public.
 
 - [x] **Final history scrub.** Public git history is permanent. Run `./scripts/check-leaks.sh`
       across every commit, not just the tip, and squash or rewrite if anything is found. Done 2026-09-04: every commit's tree, every message and every author scanned; history rewritten where it failed.
-- [ ] **Enable branch protection** on `main`, requiring the `commit-policy` status check. This is
+- [x] **Enable branch protection** on `main`, requiring the `commit-policy` status check. Done 2026-09-04. This is
       free on public repos and is currently impossible (HTTP 403 on the free plan while private).
       It is what finally makes the policy blocking rather than advisory.
-- [ ] Turn on **private vulnerability reporting** and **Dependabot alerts**. Alerts on 2026-09-04; reporting needs the repo public.
+- [x] Turn on **private vulnerability reporting** and **Dependabot alerts**. Both on 2026-09-04.
 - [x] Set the repository **description and topics**; enable **Discussions** (the issue template
       links to it). Done 2026-09-04.
 - [x] Restrict merges to **squash only**, so the commit policy applies to a single tidy commit. Done 2026-09-04.
-- [ ] Confirm `SECURITY.md`'s advisory link resolves once the repo is public.
+- [x] Confirm `SECURITY.md`'s advisory link resolves once the repo is public. Confirmed 2026-09-04.
 
 ## Releases
 

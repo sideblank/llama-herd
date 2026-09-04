@@ -264,7 +264,7 @@ failure modes are. The binding's tests need the library present to link, not a G
 | [docs/HLSR.md](docs/HLSR.md) | Hierarchical latent speculative reduction |
 | [docs/MODELS.md](docs/MODELS.md) | Auxiliary models, and the rule that decides whether one earns its place |
 | [PROVENANCE.md](PROVENANCE.md) | Origin and chain of title |
-| [LAUNCH.md](LAUNCH.md) | What remains before this goes public |
+| [LAUNCH.md](LAUNCH.md) | The launch checklist, and what remains after it |
 
 ## Status
 
