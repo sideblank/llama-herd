@@ -59,15 +59,15 @@ once it is public.
 
 ## At launch
 
-- [ ] **Final history scrub.** Public git history is permanent. Run `./scripts/check-leaks.sh`
-      across every commit, not just the tip, and squash or rewrite if anything is found.
+- [x] **Final history scrub.** Public git history is permanent. Run `./scripts/check-leaks.sh`
+      across every commit, not just the tip, and squash or rewrite if anything is found. Done 2026-09-04: every commit's tree, every message and every author scanned; history rewritten where it failed.
 - [ ] **Enable branch protection** on `main`, requiring the `commit-policy` status check. This is
       free on public repos and is currently impossible (HTTP 403 on the free plan while private).
       It is what finally makes the policy blocking rather than advisory.
-- [ ] Turn on **private vulnerability reporting** and **Dependabot alerts**.
-- [ ] Set the repository **description and topics**; enable **Discussions** (the issue template
-      links to it).
-- [ ] Restrict merges to **squash only**, so the commit policy applies to a single tidy commit.
+- [ ] Turn on **private vulnerability reporting** and **Dependabot alerts**. Alerts on 2026-09-04; reporting needs the repo public.
+- [x] Set the repository **description and topics**; enable **Discussions** (the issue template
+      links to it). Done 2026-09-04.
+- [x] Restrict merges to **squash only**, so the commit policy applies to a single tidy commit. Done 2026-09-04.
 - [ ] Confirm `SECURITY.md`'s advisory link resolves once the repo is public.
 
 ## Releases
