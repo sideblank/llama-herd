@@ -1,0 +1,29 @@
+{
+  "_comment": [
+    "Supported model x hardware combinations.",
+    "",
+    "provenance MUST be 'measured' for an entry to be installable. A 'computed' entry fits a",
+    "capacity calculation and has never been run; offering one would offer a configuration",
+    "nobody has tested. 128 streams fit the arithmetic on a 3090 and took the container with it.",
+    "",
+    "min_per_device_bytes is not derivable from min_total_bytes: a layer must fit on the device",
+    "holding it, so six 12 GiB cards do not substitute for two 24 GiB ones."
+  ],
+  "entries": [
+    {
+      "id": "qwen3.6-35b-a3b-iq3s-3090",
+      "model": "Qwen3.6-35B-A3B",
+      "quant": "UD-IQ3_S",
+      "min_total_bytes": 25769803776,
+      "min_per_device_bytes": 25769803776,
+      "min_devices": 1,
+      "split_mode": "none",
+      "streams": 48,
+      "total_context": 425984,
+      "kv_type_k": "q8_0",
+      "kv_type_v": "q8_0",
+      "provenance": "measured",
+      "note": "728.71 tok/s aggregate at depth 0 on a good node, 564.16 on a typical one; library tg128 138.40 and 119.31 respectively. Built with GGML_CUDA_FORCE_MMQ=ON. 72 streams collapsed on one node, 128 killed the process."
+    }
+  ]
+}
