@@ -60,6 +60,13 @@ func (f *fakeServer) handler() http.Handler {
 			n = req.MaxTokens
 		}
 
+		// Count before delivering, as the engine does: a token is counted when it is
+		// produced, and [DONE] follows the last one. Counting after the final flush let the
+		// client read /v1/info between [DONE] and the increment, so a warmup's tokens landed
+		// in the measured delta, and the test failed intermittently in CI.
+		f.tokens.Add(uint64(n))
+		f.passes.Add(uint64(f.passesPerRequest))
+
 		w.Header().Set("Content-Type", "text/event-stream")
 		fl, _ := w.(http.Flusher)
 		for i := 0; i < n; i++ {
@@ -73,9 +80,6 @@ func (f *fakeServer) handler() http.Handler {
 		if fl != nil {
 			fl.Flush()
 		}
-
-		f.tokens.Add(uint64(n))
-		f.passes.Add(uint64(f.passesPerRequest))
 	})
 	return mux
 }
