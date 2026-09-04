@@ -14,7 +14,8 @@ cheap now and expensive once history accumulates.
       against the source history (54 commits, one author). The assignment and licence to Liminal
       Intelligence are both drafted but **unexecuted**, so the copyright sits personally with
       Benjamin Goldman and no counterparty consent is needed to release under Apache-2.0.
-- [ ] **Sign and date PROVENANCE.md** when the first code commit lands. Do not backdate.
+- [x] **Sign and date PROVENANCE.md** when the first code commit lands. Do not backdate. Signed
+      2026-09-04.
 - [ ] **If the drafted IP assignment is later executed**, carve this project out or record the
       Apache-2.0 licence as an existing encumbrance in its schedule, or the schedule will be wrong.
 - [x] **Set the `INTERNAL_PATTERNS` repository secret in GitHub.** Done 2026-09-04 from the

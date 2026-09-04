@@ -54,9 +54,9 @@ claim and may be licensed on any terms without a counterparty's consent.
 Benjamin Goldman, as author and copyright holder, licenses the code in this repository under the
 **Apache License 2.0** (see [LICENSE](LICENSE)).
 
-**Effective date:** _______________  (date when signed; do not backdate)
+**Effective date:** 2026-09-04
 
-**Signature:** _______________
+**Signature:** Benjamin Goldman
 
 ## Sequencing: the future-works clause
 
@@ -94,6 +94,6 @@ of their upstream base model, which is not Apache-2.0 and may impose additional 
 ## Status
 
 This document is a **factual record prepared by the project, not legal advice**, and has not been
-reviewed by counsel. The signature and effective date are unfilled. The facts stated about the
-unexecuted assignment and licence were verified on 2026-08-21 and should be re-confirmed at
+reviewed by counsel. It was signed and dated on 2026-09-04. The facts stated about the
+unexecuted assignment and licence were verified on 2026-08-21 and re-affirmed by the author at
 signing.
