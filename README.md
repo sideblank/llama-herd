@@ -45,6 +45,26 @@ the streams are arranged. Method, caveats and the full surface are in
 Anything llama.cpp runs on, this runs on. A stack of 3060s is a legitimate deployment, and
 heterogeneous multi-GPU is a design goal rather than an accident.
 
+## Recommended models
+
+The binary embeds a catalog of model and card combinations, and an entry earns its place only by
+being measured: a configuration that merely fits the arithmetic is not offered, because 128
+streams fit the arithmetic on a 3090 and took the container down. `llama-herd models` prints
+which entries this machine can run and names the shortfall for the rest.
+
+| Model | Quant | Card | Configuration | Measured |
+|---|---|---|---|---|
+| [Qwen3.6-35B-A3B](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF) | `UD-IQ3_S` (14.3 GiB) | RTX 3090 | 48 streams, 425,984-token unified pool, KV `q8_0`/`q8_0`, flash attention, speculation off | 728.71 tok/s on a good node, 564.16 on a typical one |
+
+That GGUF is the one every figure in this README comes from. It keeps its MTP head, which is
+why it was chosen, and the head is left unloaded because speculation measured net-negative on it.
+The manifest is [examples/3090-throughput.json](examples/3090-throughput.json), and the same
+entry on the 4090 and 5090 is a projection until measured.
+
+To try the server without a GPU, any small instruct model in a 4-bit GGUF works; the engine's own
+tests run on a 0.5B. New entries go in `internal/catalog/models.json` with their measurement
+beside them.
+
 ## How it works
 
 ```
