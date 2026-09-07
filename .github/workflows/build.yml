@@ -86,6 +86,28 @@ jobs:
             shim/lhspec_stub.cpp -o "$out"
           cp shim/lhspec.h "$RUNNER_TEMP/prefix/include/"
 
+      - name: Build the chat shim
+        shell: bash
+        # Same reasoning as the speculative shim above: the binding links liblhchat, the C
+        # ABI over llama.cpp's chat templates, and the real one needs the common library the
+        # image builds. This job checks that the binding compiles and its tests pass, so it
+        # builds the stub — same ABI, refusing every call — against the same headers.
+        #
+        # The stub refuses rather than rendering without tools. A prompt missing its tools
+        # answers a request that was never served, and no caller can tell that from a model
+        # that declined; the real shim exists to remove that silence, so the stub must not
+        # reintroduce it.
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Windows) out="$RUNNER_TEMP/prefix/lib/liblhchat.dll" ;;
+            *)       out="$RUNNER_TEMP/prefix/lib/liblhchat.so" ;;
+          esac
+          g++ -O2 -fPIC -shared -std=c++17 \
+            -I"$RUNNER_TEMP/prefix/include" -Ishim \
+            shim/lhchat_stub.cpp -o "$out"
+          cp shim/lhchat.h "$RUNNER_TEMP/prefix/include/"
+
       - name: Vet and build
         shell: bash
         run: |
