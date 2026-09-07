@@ -112,10 +112,58 @@ func (r ChatRequest) limit() int {
 	return r.MaxTokens
 }
 
+// toolSpec returns the tools array as JSON and the choice as a plain word.
+//
+// An absent or empty array yields "", which is what makes a request without tools take the
+// original path: tool_choice alone never enables the lane, because a choice with nothing to
+// choose from is a caller error and honouring it would present an empty tool list to every
+// model.
+func (r *ChatRequest) toolSpec() (string, string) {
+	if len(r.Tools) == 0 {
+		return "", ""
+	}
+	var probe []json.RawMessage
+	if err := json.Unmarshal(r.Tools, &probe); err != nil || len(probe) == 0 {
+		return "", ""
+	}
+	choice := "auto"
+	if len(r.ToolChoice) > 0 {
+		var word string
+		if err := json.Unmarshal(r.ToolChoice, &word); err == nil {
+			switch word {
+			case "required", "none", "auto":
+				choice = word
+			}
+		} else {
+			// The object form names one function. In template terms that is a required
+			// call; the model still picks from the list it was given.
+			choice = "required"
+		}
+	}
+	return string(r.Tools), choice
+}
+
 // Message shapes for responses.
 type respMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	// ToolCalls is omitted unless the model asked to run something, so a reply that used no
+	// tools is byte-identical to one from a build without tool support.
+	ToolCalls []respToolCall `json:"tool_calls,omitempty"`
+}
+
+// respToolCall is one call in the shape clients expect, with the arguments left as the JSON
+// string the model produced rather than re-encoded — re-encoding would silently normalise a
+// model's output and hide malformed arguments the caller needs to see.
+type respToolCall struct {
+	ID       string           `json:"id"`
+	Type     string           `json:"type"`
+	Function respToolFunction `json:"function"`
+}
+
+type respToolFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 type choice struct {

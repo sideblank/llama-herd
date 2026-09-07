@@ -126,13 +126,28 @@ func (r *Runner) RenderChatTools(msgs []engine.ChatMessage, toolsJSON, toolChoic
 //
 // The arguments must match the render: the parser comes from the same template application,
 // and one built from different inputs reads the text with the wrong grammar and finds nothing.
-func (r *Runner) ParseChatOutput(msgs []engine.ChatMessage, toolsJSON, toolChoice, text string) (ParsedOutput, error) {
+func (r *Runner) ParseChatOutput(msgs []engine.ChatMessage, toolsJSON, toolChoice, text string) (string, []engine.ToolCall, error) {
 	conv := make([]ChatMessage, len(msgs))
 	for i, m := range msgs {
 		conv[i] = ChatMessage{Role: m.Role, Content: m.Content}
 	}
-	return r.model.ParseOutput(conv, toolsJSON, toolChoice, text)
+	out, err := r.model.ParseOutput(conv, toolsJSON, toolChoice, text)
+	if err != nil {
+		return text, nil, err
+	}
+	calls := make([]engine.ToolCall, 0, len(out.ToolCalls))
+	for _, c := range out.ToolCalls {
+		calls = append(calls, engine.ToolCall{Name: c.Name, Arguments: c.Arguments, ID: c.ID})
+	}
+	return out.Content, calls, nil
 }
+
+// SupportsTools reports whether this model can be given tool definitions.
+//
+// It answers from the template rather than from a build flag: a model with no chat template
+// cannot be told about tools at all, and saying otherwise would let a request be accepted and
+// then answered without them.
+func (r *Runner) SupportsTools() bool { return r.chatTmpl != "" }
 
 // DefaultNoThinkPrime opens and immediately closes a reasoning block, so a model that would
 // otherwise reason continues straight into its answer.

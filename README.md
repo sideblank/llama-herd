@@ -16,7 +16,8 @@ project ships no model weights and builds no quantizations.
 - **Several models on one card**, each with its own weights, decode loop and stream budget, sized
   per model so a herd can span cards of different capacities.
 - **An OpenAI-compatible API** with streaming, per-request sampling, vision input for models that
-  ship a projector, and grammar-constrained output.
+  ship a projector, grammar-constrained output, and tool calling rendered through each model's
+  own chat template.
 - **Speculative decoding** from the sequence's own context, or from a model's multi-token
   prediction head when the GGUF kept one, with a startup check that refuses it on caches that
   cannot be rewound.

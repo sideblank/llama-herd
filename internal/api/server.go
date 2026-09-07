@@ -423,7 +423,8 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// decides per request, and that decision is often a near-tie: the same prompt yields an
 	// empty block on one run and hundreds of reasoning tokens on the next, which makes
 	// throughput unpredictable as well as lower. A caller that wants reasoning asks for it.
-	prompt, err := renderWithThinking(rend, msgs, req.Think)
+	toolsJSON, toolChoice := req.toolSpec()
+	prompt, err := renderWithTools(rend, msgs, req.Think, toolsJSON, toolChoice)
 	if err != nil {
 		s.writeErr(w, http.StatusBadRequest, "invalid_request_error",
 			fmt.Sprintf("could not render messages: %v", err))
@@ -455,14 +456,25 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		s.streamChat(w, req.Model, stream)
 		return
 	}
-	s.bufferChat(w, req.Model, stream)
+	s.bufferChat(w, req.Model, stream, toolCtx{
+		rend: rend, msgs: msgs, toolsJSON: toolsJSON, toolChoice: toolChoice,
+	})
 }
 
 // maxRequestBytes bounds a request body. Prompts can be large — 128k of context is the
 // point — so this is generous, but unbounded would let one caller exhaust memory.
 const maxRequestBytes = 64 << 20
 
-func (s *Server) bufferChat(w http.ResponseWriter, model string, st *engine.Stream) {
+// toolCtx is what reading tool calls back out of a completion needs. Its zero value means
+// "no tools were offered", which is the path every request took before tools existed.
+type toolCtx struct {
+	rend       engine.Renderer
+	msgs       []engine.ChatMessage
+	toolsJSON  string
+	toolChoice string
+}
+
+func (s *Server) bufferChat(w http.ResponseWriter, model string, st *engine.Stream, tc toolCtx) {
 	var sb strings.Builder
 	reason := engine.ReasonEOS
 	for ev := range st.Events {
@@ -477,11 +489,19 @@ func (s *Server) bufferChat(w http.ResponseWriter, model string, st *engine.Stre
 	}
 
 	fr := finishReason(reason)
+	msg := respMessage{Role: "assistant", Content: sb.String()}
+	// A model asked for tools may answer in prose instead, which is a legitimate outcome
+	// under "auto" — so an empty result here is not an error and leaves the reply unchanged.
+	if content, calls, ok := parseToolCalls(tc.rend, tc.msgs, tc.toolsJSON, tc.toolChoice, sb.String()); ok {
+		msg.Content = content
+		msg.ToolCalls = calls
+		fr = "tool_calls"
+	}
 	resp := chatResponse{
 		ID: s.nextID(), Object: "chat.completion", Created: s.now().Unix(), Model: model,
 		Choices: []choice{{
 			Index:        0,
-			Message:      &respMessage{Role: "assistant", Content: sb.String()},
+			Message:      &msg,
 			FinishReason: &fr,
 		}},
 	}
@@ -566,6 +586,52 @@ func finishReason(r string) string {
 	default:
 		return "stop"
 	}
+}
+
+// renderWithTools renders a chat, presenting tool definitions when the request carried any.
+//
+// A request with no tools takes exactly the path it took before tools existed. A request WITH
+// tools that this backend cannot present is refused rather than served without them: answering
+// it anyway returns a confident reply to a question the model was never asked, and the caller
+// has no way to tell that from a model that considered the tools and declined.
+func renderWithTools(rend engine.Renderer, msgs []engine.ChatMessage, think *bool, toolsJSON, toolChoice string) (string, error) {
+	if toolsJSON == "" {
+		return renderWithThinking(rend, msgs, think)
+	}
+	tr, ok := rend.(engine.ToolRenderer)
+	if !ok || tr == nil || !tr.SupportsTools() {
+		return "", errors.New("this model cannot be given tool definitions")
+	}
+	return tr.RenderChatTools(msgs, toolsJSON, toolChoice)
+}
+
+// parseToolCalls reads a completion back for the calls the model asked for. The final bool is
+// false when there is nothing to report — no tools were offered, the backend cannot parse
+// them, or the model answered in prose.
+func parseToolCalls(rend engine.Renderer, msgs []engine.ChatMessage, toolsJSON, toolChoice, text string) (string, []respToolCall, bool) {
+	if toolsJSON == "" {
+		return text, nil, false
+	}
+	tr, ok := rend.(engine.ToolRenderer)
+	if !ok || tr == nil {
+		return text, nil, false
+	}
+	content, calls, err := tr.ParseChatOutput(msgs, toolsJSON, toolChoice, text)
+	if err != nil || len(calls) == 0 {
+		return text, nil, false
+	}
+	out := make([]respToolCall, 0, len(calls))
+	for i, c := range calls {
+		id := c.ID
+		if id == "" {
+			id = fmt.Sprintf("call_%d", i)
+		}
+		out = append(out, respToolCall{
+			ID: id, Type: "function",
+			Function: respToolFunction{Name: c.Name, Arguments: c.Arguments},
+		})
+	}
+	return content, out, true
 }
 
 // renderWithThinking renders a chat, suppressing the model's reasoning block unless the

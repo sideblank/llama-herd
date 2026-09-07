@@ -181,6 +181,36 @@ type ThinkingRenderer interface {
 	SupportsThinking() bool
 }
 
+// ToolCall is one function call a model asked for.
+type ToolCall struct {
+	Name      string
+	Arguments string
+	ID        string
+}
+
+// ToolRenderer is an optional Renderer capability for models whose template can present tool
+// definitions and whose output can be read back for the calls they asked for.
+//
+// It is separate from Renderer because tools travel a different path through llama.cpp: the
+// plain template call takes messages alone, and a tools array handed to it is discarded with
+// nothing to report it. A backend that cannot render tools must therefore be asked, not
+// assumed — serving a tools request without the tools produces a confident answer to a
+// question that was never put to the model.
+//
+// Rendering and parsing are one capability rather than two because the format a model emits
+// calls in is a property of its template. A parser built from anything other than the render
+// that produced the prompt reads the same text with the wrong grammar and finds nothing.
+type ToolRenderer interface {
+	// RenderChatTools renders messages together with an OpenAI `tools` array, given
+	// verbatim as JSON. An empty toolsJSON renders exactly as RenderChat does.
+	RenderChatTools(msgs []ChatMessage, toolsJSON, toolChoice string) (string, error)
+	// ParseChatOutput separates a completion into prose and the calls it asked for. The
+	// arguments must match the ones the prompt was rendered with.
+	ParseChatOutput(msgs []ChatMessage, toolsJSON, toolChoice, text string) (string, []ToolCall, error)
+	// SupportsTools reports whether this model can be given tool definitions.
+	SupportsTools() bool
+}
+
 var (
 	// ErrNoKVSlot means the KV cache could not fit the batch. Recoverable: free a
 	// sequence and resubmit.
