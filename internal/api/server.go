@@ -453,7 +453,9 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	defer stream.Close()
 
 	if req.Stream {
-		s.streamChat(w, req.Model, stream)
+		s.streamChat(w, req.Model, stream, toolCtx{
+			rend: rend, msgs: msgs, toolsJSON: toolsJSON, toolChoice: toolChoice,
+		})
 		return
 	}
 	s.bufferChat(w, req.Model, stream, toolCtx{
@@ -511,7 +513,7 @@ func (s *Server) bufferChat(w http.ResponseWriter, model string, st *engine.Stre
 
 // streamChat writes server-sent events in the shape clients expect: a role-only first chunk,
 // content deltas, a final chunk carrying finish_reason, then [DONE].
-func (s *Server) streamChat(w http.ResponseWriter, model string, st *engine.Stream) {
+func (s *Server) streamChat(w http.ResponseWriter, model string, st *engine.Stream, tc toolCtx) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		s.writeErr(w, http.StatusInternalServerError, "server_error", "streaming unsupported")
@@ -544,6 +546,8 @@ func (s *Server) streamChat(w http.ResponseWriter, model string, st *engine.Stre
 
 	send(choice{Index: 0, Delta: &respMessage{Role: "assistant"}})
 
+	// Holds the answer while tools are in play; unused otherwise.
+	var buffered strings.Builder
 	reason := engine.ReasonEOS
 	for ev := range st.Events {
 		if ev.Err != nil {
@@ -556,7 +560,18 @@ func (s *Server) streamChat(w http.ResponseWriter, model string, st *engine.Stre
 			break
 		}
 		if ev.Text != "" {
-			send(choice{Index: 0, Delta: &respMessage{Content: ev.Text}})
+			// ⛔ A TOOLS REQUEST IS BUFFERED, NOT STREAMED AS PROSE. The calls a model asks
+			// for arrive as markup its template defines, and forwarding that verbatim hands
+			// the client `<tool_call>{...}` as assistant CONTENT — visible junk that is also
+			// not the tool call it is supposed to be. The calls can only be recognised once
+			// the text is whole, so the text is held until then.
+			//
+			// A request without tools streams exactly as before, token by token.
+			if tc.toolsJSON != "" {
+				buffered.WriteString(ev.Text)
+			} else {
+				send(choice{Index: 0, Delta: &respMessage{Content: ev.Text}})
+			}
 		}
 		if ev.Done {
 			reason = ev.Reason
@@ -564,6 +579,17 @@ func (s *Server) streamChat(w http.ResponseWriter, model string, st *engine.Stre
 	}
 
 	fr := finishReason(reason)
+	if tc.toolsJSON != "" {
+		content, calls, ok := parseToolCalls(tc.rend, tc.msgs, tc.toolsJSON, tc.toolChoice, buffered.String())
+		if ok {
+			send(choice{Index: 0, Delta: &respMessage{Content: content, ToolCalls: calls}})
+			fr = "tool_calls"
+		} else {
+			// The model answered in prose, which is legitimate under "auto". Release what
+			// was held so a buffered turn is never silently dropped.
+			send(choice{Index: 0, Delta: &respMessage{Content: buffered.String()}})
+		}
+	}
 	send(choice{Index: 0, Delta: &respMessage{}, FinishReason: &fr})
 	fmt.Fprint(w, "data: [DONE]\n\n")
 	flusher.Flush()
@@ -602,7 +628,7 @@ func renderWithTools(rend engine.Renderer, msgs []engine.ChatMessage, think *boo
 	if !ok || tr == nil || !tr.SupportsTools() {
 		return "", errors.New("this model cannot be given tool definitions")
 	}
-	return tr.RenderChatTools(msgs, toolsJSON, toolChoice)
+	return tr.RenderChatTools(msgs, toolsJSON, toolChoice, think != nil && *think)
 }
 
 // parseToolCalls reads a completion back for the calls the model asked for. The final bool is

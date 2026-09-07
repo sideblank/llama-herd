@@ -203,7 +203,13 @@ type ToolCall struct {
 type ToolRenderer interface {
 	// RenderChatTools renders messages together with an OpenAI `tools` array, given
 	// verbatim as JSON. An empty toolsJSON renders exactly as RenderChat does.
-	RenderChatTools(msgs []ChatMessage, toolsJSON, toolChoice string) (string, error)
+	//
+	// think carries the same meaning as in ThinkingRenderer, because the two capabilities
+	// compose: a reasoning model asked for tools still reasons unless it is primed not to,
+	// and a request that suppressed reasoning must keep that suppression when it also
+	// carries tools. Dropping it here would silently reinstate the reasoning tokens the
+	// caller asked to avoid.
+	RenderChatTools(msgs []ChatMessage, toolsJSON, toolChoice string, think bool) (string, error)
 	// ParseChatOutput separates a completion into prose and the calls it asked for. The
 	// arguments must match the ones the prompt was rendered with.
 	ParseChatOutput(msgs []ChatMessage, toolsJSON, toolChoice, text string) (string, []ToolCall, error)

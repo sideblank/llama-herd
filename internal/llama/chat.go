@@ -111,15 +111,25 @@ func (r *Runner) RenderChat(msgs []engine.ChatMessage) (string, error) {
 // An empty toolsJSON renders exactly as RenderChat does, so callers can pass whatever the
 // request carried without branching. Tools reach the model only through this path: the core
 // template call takes messages alone and drops a tools array without reporting it.
-func (r *Runner) RenderChatTools(msgs []engine.ChatMessage, toolsJSON, toolChoice string) (string, error) {
+func (r *Runner) RenderChatTools(msgs []engine.ChatMessage, toolsJSON, toolChoice string, think bool) (string, error) {
 	if toolsJSON == "" {
-		return r.RenderChat(msgs)
+		return r.RenderChatThinking(msgs, think)
 	}
 	conv := make([]ChatMessage, len(msgs))
 	for i, m := range msgs {
 		conv[i] = ChatMessage{Role: m.Role, Content: m.Content}
 	}
-	return r.model.ApplyChatTemplateTools(conv, toolsJSON, toolChoice, true)
+	out, err := r.model.ApplyChatTemplateTools(conv, toolsJSON, toolChoice, true)
+	if err != nil {
+		return "", err
+	}
+	// The prime is appended after rendering, exactly as RenderChatThinking does it — a
+	// reasoning model handed tools still reasons otherwise, and the caller who asked for
+	// tools did not thereby ask to pay for a reasoning block.
+	if think || r.thinkPrime == "" {
+		return out, nil
+	}
+	return out + r.thinkPrime, nil
 }
 
 // ParseChatOutput separates a completion into prose and the tool calls the model asked for.
