@@ -29,7 +29,7 @@
 extern "C" {
 #endif
 
-#define LHCHAT_ABI_VERSION 1
+#define LHCHAT_ABI_VERSION 2
 
 int lhchat_abi_version(void);
 
@@ -58,6 +58,38 @@ int32_t lhchat_apply_template_tools(void *model, const char *blob, const char *t
  */
 int32_t lhchat_parse_output(void *model, const char *blob, const char *tools_json,
                             int32_t tool_choice, const char *text, char *out, int32_t cap);
+
+/* v2 — the two calls above, plus an explicit enable_thinking.
+ *
+ *   enable_thinking  1 = let the template open a reasoning block, 0 = have it emit the CLOSED
+ *                    block itself (Qwen3.x renders `<think>\n\n</think>\n\n`).
+ *
+ * common_chat_templates_inputs.enable_thinking DEFAULTS TO TRUE and v1 never set it, so every
+ * tools render came out of the Jinja layer with thinking ON. A caller that also applies its own
+ * no-think prime then nests an unclosed reasoning block into the assistant prefix. Silent: the
+ * model answers anyway, degraded.
+ *
+ * ⛔ WHEN YOU PASS 0 HERE, DO NOT ALSO APPEND A NO-THINK PRIME. That prime exists for the CORE
+ * C API path, which renders through llama.cpp's built-in minimal templates and knows nothing
+ * about thinking — there the prime is the only control. This path is the real Jinja template
+ * and closes the block itself; doing both nests them.
+ *
+ * ⛔ THE PARSE CALL TAKES IT TOO, AND MUST BE GIVEN THE SAME VALUE AS THE RENDER. The parser
+ * configuration is derived from a re-render: common_chat_parser_params is constructed from
+ * common_chat_params, which carries supports_thinking and the think tags. Rendering with
+ * thinking off and parsing with it on is the "parser quietly stops matching the format it is
+ * parsing" failure the v1 comment warns about, one function over.
+ *
+ * v1 is retained and delegates here with enable_thinking=1 — exactly what it did implicitly —
+ * so an older caller against a newer lib sees no change.
+ */
+int32_t lhchat_apply_template_tools_ex(void *model, const char *blob, const char *tools_json,
+                                       int32_t tool_choice, int add_ass, int enable_thinking,
+                                       char *out, int32_t cap);
+
+int32_t lhchat_parse_output_ex(void *model, const char *blob, const char *tools_json,
+                               int32_t tool_choice, const char *text, int enable_thinking,
+                               char *out, int32_t cap);
 
 #ifdef __cplusplus
 }

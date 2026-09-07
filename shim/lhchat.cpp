@@ -95,7 +95,8 @@ int32_t emit(const std::string &s, char *out, int32_t cap) {
  * deriving the parser from a DIFFERENT apply() than the one that rendered the prompt is how a
  * parser silently stops matching the format it is parsing. */
 bool build(llama_model *model, const char *blob, const char *tools_json, int32_t tool_choice,
-           int add_ass, common_chat_templates_ptr &tmpls, common_chat_params &params) {
+           int add_ass, int enable_thinking, common_chat_templates_ptr &tmpls,
+           common_chat_params &params) {
     tmpls = common_chat_templates_init(model, "");
     if (!tmpls) return false;
     common_chat_templates_inputs inputs;
@@ -104,6 +105,14 @@ bool build(llama_model *model, const char *blob, const char *tools_json, int32_t
     inputs.tool_choice = choice_of(tool_choice);
     inputs.add_generation_prompt = add_ass != 0;
     inputs.use_jinja = true;  /* tools are only honoured on the Jinja path */
+    /* ⛔ MUST BE SET EXPLICITLY. common_chat_templates_inputs.enable_thinking defaults to TRUE
+     * (common/chat.h) and v1 never touched it, so every tools render came out with thinking on.
+     * Qwen3.x templates branch on exactly this field:
+     *     {%- if enable_thinking is defined and enable_thinking is false %}
+     *         {{- '<think>\n\n</think>\n\n' }}   {%- else %}   {{- '<think>\n' }}
+     * so the default opens a reasoning block that a caller applying its own no-think prime then
+     * nests a second one inside. */
+    inputs.enable_thinking = enable_thinking != 0;
     if (inputs.messages.empty()) return false;
     params = common_chat_templates_apply(tmpls.get(), inputs);
     return true;
@@ -115,13 +124,26 @@ extern "C" {
 
 int lhchat_abi_version(void) { return LHCHAT_ABI_VERSION; }
 
+/* v1 — RETAINED UNCHANGED IN BEHAVIOUR. Delegates with enable_thinking=1, which is precisely what
+ * it did implicitly before v2 existed (the field defaults to true), so an older caller linked
+ * against a newer lib sees no change. That is the whole reason v2 adds symbols beside these rather
+ * than changing their signatures: the Go binding resolves by NAME at load time, so a changed
+ * signature breaks callers silently at runtime instead of loudly at build time. */
 int32_t lhchat_apply_template_tools(void *modelv, const char *blob, const char *tools_json,
                                          int32_t tool_choice, int add_ass, char *out, int32_t cap) {
+    return lhchat_apply_template_tools_ex(modelv, blob, tools_json, tool_choice, add_ass,
+                                          /*enable_thinking=*/1, out, cap);
+}
+
+int32_t lhchat_apply_template_tools_ex(void *modelv, const char *blob, const char *tools_json,
+                                       int32_t tool_choice, int add_ass, int enable_thinking,
+                                       char *out, int32_t cap) {
     if (!modelv || !blob) return -1;
     try {
         common_chat_templates_ptr tmpls;
         common_chat_params params;
-        if (!build((llama_model *)modelv, blob, tools_json, tool_choice, add_ass, tmpls, params))
+        if (!build((llama_model *)modelv, blob, tools_json, tool_choice, add_ass, enable_thinking,
+                   tmpls, params))
             return -2;
         return emit(params.prompt, out, cap);
     } catch (...) {
@@ -132,8 +154,16 @@ int32_t lhchat_apply_template_tools(void *modelv, const char *blob, const char *
     }
 }
 
+/* v1 — retained, delegates with enable_thinking=1 (its exact prior behaviour). */
 int32_t lhchat_parse_output(void *modelv, const char *blob, const char *tools_json,
                                  int32_t tool_choice, const char *text, char *out, int32_t cap) {
+    return lhchat_parse_output_ex(modelv, blob, tools_json, tool_choice, text,
+                                  /*enable_thinking=*/1, out, cap);
+}
+
+int32_t lhchat_parse_output_ex(void *modelv, const char *blob, const char *tools_json,
+                               int32_t tool_choice, const char *text, int enable_thinking,
+                               char *out, int32_t cap) {
     if (!modelv || !text) return -1;
     try {
         common_chat_templates_ptr tmpls;
@@ -141,7 +171,8 @@ int32_t lhchat_parse_output(void *modelv, const char *blob, const char *tools_js
         /* Re-apply to recover the parser configuration that matches how the prompt was
          * rendered. Cheap relative to a decode, and stateless — the alternative is handing a
          * format id across the FFI boundary and trusting the two sides to agree about it. */
-        if (!build((llama_model *)modelv, blob, tools_json, tool_choice, /*add_ass=*/1, tmpls, params))
+        if (!build((llama_model *)modelv, blob, tools_json, tool_choice, /*add_ass=*/1,
+                   enable_thinking, tmpls, params))
             return -2;
         common_chat_parser_params pp(params);
         common_chat_msg msg = common_chat_parse(std::string(text), /*is_partial=*/false, pp);

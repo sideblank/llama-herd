@@ -7,10 +7,12 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/sideblank/llama-herd/internal/hostinfo"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -589,4 +591,145 @@ func TestModelWithoutReasoningIsRenderedUnchanged(t *testing.T) {
 // that reports the tester's load rather than the code's behaviour.
 func idleHost() hostinfo.Host {
 	return hostinfo.Host{OS: "linux", Arch: "amd64", CPUs: 8, LoadAvg1: 0.1, LoadAvg5: 0.1, LoadAvg15: 0.1}
+}
+
+// toolRend is a ToolRenderer whose parse outcome the test chooses, so the three cases the API
+// must keep apart can each be produced on demand.
+type toolRend struct {
+	calls     []engine.ToolCall
+	err       error
+	lastThink bool
+	parsed    bool
+}
+
+func (t *toolRend) RenderChat([]engine.ChatMessage) (string, error) { return "plain", nil }
+func (t *toolRend) SupportsTools() bool                             { return true }
+func (t *toolRend) RenderChatTools(_ []engine.ChatMessage, _, _ string, think bool) (string, error) {
+	t.lastThink = think
+	return "tools-prompt", nil
+}
+func (t *toolRend) ParseChatOutput(_ []engine.ChatMessage, _, _, text string, think bool) (string, []engine.ToolCall, error) {
+	t.parsed, t.lastThink = true, think
+	if t.err != nil {
+		return text, nil, t.err
+	}
+	return "", t.calls, nil
+}
+
+// ⛔ A PARSE FAILURE AND A MODEL DECLINING MUST NOT LOOK THE SAME.
+//
+// The API used to collapse `err != nil || len(calls) == 0` into one boolean, so a parse that
+// blew up was reported exactly as "the model answered in prose": a 200, the raw generation in
+// content, no tool_calls, and nothing anywhere saying the parse had failed. That is not a
+// hypothetical — a card was observed returning a complete, well-formed tool call as text while
+// the API reported no calls, and the discard is why finding it took an experiment rather than
+// a log line.
+func TestParseFailureIsNotReportedAsTheModelDeclining(t *testing.T) {
+	msgs := []engine.ChatMessage{{Role: "user", Content: "hi"}}
+	base := func(r *toolRend) toolCtx {
+		return toolCtx{rend: r, msgs: msgs, toolsJSON: `[{"type":"function"}]`, toolChoice: "auto"}
+	}
+
+	// 1. A real call comes back as a call.
+	r := &toolRend{calls: []engine.ToolCall{{Name: "lookup", Arguments: `{"x":1}`}}}
+	content, calls, err := parseToolCalls(base(r), "raw")
+	if err != nil || len(calls) != 1 || calls[0].Function.Name != "lookup" {
+		t.Fatalf("a parsed call must survive: content=%q calls=%+v err=%v", content, calls, err)
+	}
+
+	// 2. No calls, no error — the model chose prose. Legitimate under "auto".
+	r = &toolRend{}
+	content, calls, err = parseToolCalls(base(r), "just prose")
+	if err != nil || len(calls) != 0 {
+		t.Fatalf("a declining model is not an error: calls=%+v err=%v", calls, err)
+	}
+	if content != "just prose" {
+		t.Fatalf("the generation must survive a no-call parse, got %q", content)
+	}
+
+	// 3. A parse ERROR must be distinguishable from case 2 — the whole point.
+	boom := errors.New("grammar did not match")
+	r = &toolRend{err: boom}
+	content, calls, err = parseToolCalls(base(r), "<tool_call>...</tool_call>")
+	if err == nil {
+		t.Fatal("a parse failure must surface as an error, not as an empty call list — " +
+			"collapsing the two is what made a broken parse look like a model declining")
+	}
+	if !errors.Is(err, boom) {
+		t.Fatalf("the underlying parse error must reach the caller, got %v", err)
+	}
+	if content != "<tool_call>...</tool_call>" {
+		t.Fatalf("the raw generation must be returned so the turn is not dropped, got %q", content)
+	}
+
+	// 4. Tools asked of a backend that cannot render them is a refusal, never silence.
+	content, calls, err = parseToolCalls(toolCtx{
+		rend: &plainRend{}, msgs: msgs, toolsJSON: `[{"type":"function"}]`,
+	}, "text")
+	if !errors.Is(err, errNoToolSupport) {
+		t.Fatalf("a backend with no tool support must say so, got err=%v calls=%+v", err, calls)
+	}
+}
+
+// The parse must be given the SAME `think` the render was, because the parser is derived from a
+// re-render and carries its think tags. A mismatch reads the completion with the wrong grammar
+// and reports no calls — indistinguishable, before this, from the model declining.
+func TestParseIsGivenTheThinkTheRenderUsed(t *testing.T) {
+	r := &toolRend{}
+	tc := toolCtx{rend: r, msgs: []engine.ChatMessage{{Role: "user", Content: "hi"}},
+		toolsJSON: `[{"type":"function"}]`, toolChoice: "auto", think: true}
+	if _, _, err := parseToolCalls(tc, "text"); err != nil {
+		t.Fatal(err)
+	}
+	if !r.parsed || !r.lastThink {
+		t.Fatalf("think must reach the parse: parsed=%v think=%v", r.parsed, r.lastThink)
+	}
+}
+
+// ⛔ THE HANDLER MUST HAND THE PARSE THE SAME `think` IT HANDED THE RENDER.
+//
+// This is a guard against a specific mistake that was made while adding the field: `toolCtx`
+// gained a `think` member and the two construction sites were left to the zero value, so every
+// render used the request's value while every parse used false. Nothing failed — the parse just
+// quietly stopped matching, which is the exact defect the field was added to prevent, rebuilt by
+// the fix for it. A unit test on parseToolCalls could not see it, because it sets `think` itself;
+// only driving a real request through the handler can.
+func TestHandlerGivesRenderAndParseTheSameThink(t *testing.T) {
+	for _, think := range []bool{true, false} {
+		r := &toolRend{}
+		f := enginetest.New(2, 32, "hi")
+		reg := engine.NewRegistry()
+		if err := reg.Add("m", engine.New(f, engine.Config{}), r); err != nil {
+			t.Fatal(err)
+		}
+		// reg.Start is not optional: without it the registry's workers never run and the
+		// request blocks forever rather than failing.
+		ctx, cancel := context.WithCancel(context.Background())
+		reg.Start(ctx)
+		srv := New(reg)
+		srv.SetHostReader(idleHost)
+		ts := httptest.NewServer(srv.Handler())
+
+		body := `{"model":"m","think":` + strconv.FormatBool(think) +
+			`,"tools":[{"type":"function","function":{"name":"f"}}],` +
+			`"messages":[{"role":"user","content":"hi"}]}`
+		resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+		if err != nil {
+			ts.Close()
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		ts.Close()
+		cancel()
+
+		if !r.parsed {
+			t.Fatalf("think=%v: the parse never ran, so the assertion below proves nothing", think)
+		}
+		if r.lastThink != think {
+			t.Errorf("think=%v: the parse saw think=%v — render and parse disagree, so the "+
+				"parser reads the completion with the wrong grammar and reports no calls",
+				think, r.lastThink)
+		}
+	}
 }

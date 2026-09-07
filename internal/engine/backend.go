@@ -212,7 +212,10 @@ type ToolRenderer interface {
 	RenderChatTools(msgs []ChatMessage, toolsJSON, toolChoice string, think bool) (string, error)
 	// ParseChatOutput separates a completion into prose and the calls it asked for. The
 	// arguments must match the ones the prompt was rendered with.
-	ParseChatOutput(msgs []ChatMessage, toolsJSON, toolChoice, text string) (string, []ToolCall, error)
+	// think must be the value RenderChatTools was given. The parser is derived from the same
+	// template application and carries its think tags; a mismatch reads the completion with the
+	// wrong grammar and silently reports no calls.
+	ParseChatOutput(msgs []ChatMessage, toolsJSON, toolChoice, text string, think bool) (string, []ToolCall, error)
 	// SupportsTools reports whether this model can be given tool definitions.
 	SupportsTools() bool
 }

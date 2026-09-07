@@ -35,4 +35,22 @@ int32_t lhchat_parse_output(void *model, const char *blob, const char *tools_jso
     return -3;
 }
 
+/* v2 (enable_thinking). Stubbed for the same reason and with the same refusal: a build that
+ * links this reports that tools are unavailable rather than rendering them away silently. */
+int32_t lhchat_apply_template_tools_ex(void *model, const char *blob, const char *tools_json,
+                                       int32_t tool_choice, int add_ass, int enable_thinking,
+                                       char *out, int32_t cap) {
+    (void)model; (void)blob; (void)tools_json; (void)tool_choice;
+    (void)add_ass; (void)enable_thinking; (void)out; (void)cap;
+    return -3;
+}
+
+int32_t lhchat_parse_output_ex(void *model, const char *blob, const char *tools_json,
+                               int32_t tool_choice, const char *text, int enable_thinking,
+                               char *out, int32_t cap) {
+    (void)model; (void)blob; (void)tools_json; (void)tool_choice;
+    (void)text; (void)enable_thinking; (void)out; (void)cap;
+    return -3;
+}
+
 }  /* extern "C" */

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -452,15 +453,18 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	defer stream.Close()
 
+	// think must be the value the RENDER used — renderWithTools computes it the same way.
+	// Leaving it to the zero value would make every parse disagree with its own render, which
+	// is the failure this field exists to prevent.
+	tc := toolCtx{
+		rend: rend, msgs: msgs, toolsJSON: toolsJSON, toolChoice: toolChoice,
+		think: req.Think != nil && *req.Think,
+	}
 	if req.Stream {
-		s.streamChat(w, req.Model, stream, toolCtx{
-			rend: rend, msgs: msgs, toolsJSON: toolsJSON, toolChoice: toolChoice,
-		})
+		s.streamChat(w, req.Model, stream, tc)
 		return
 	}
-	s.bufferChat(w, req.Model, stream, toolCtx{
-		rend: rend, msgs: msgs, toolsJSON: toolsJSON, toolChoice: toolChoice,
-	})
+	s.bufferChat(w, req.Model, stream, tc)
 }
 
 // maxRequestBytes bounds a request body. Prompts can be large — 128k of context is the
@@ -474,6 +478,10 @@ type toolCtx struct {
 	msgs       []engine.ChatMessage
 	toolsJSON  string
 	toolChoice string
+	// think is the value the prompt was RENDERED with, carried so the parse can be given the
+	// same one. The parser is derived from a re-render and carries its think tags; deriving it
+	// from a different value reads the completion with the wrong grammar and finds no calls.
+	think bool
 }
 
 func (s *Server) bufferChat(w http.ResponseWriter, model string, st *engine.Stream, tc toolCtx) {
@@ -492,9 +500,16 @@ func (s *Server) bufferChat(w http.ResponseWriter, model string, st *engine.Stre
 
 	fr := finishReason(reason)
 	msg := respMessage{Role: "assistant", Content: sb.String()}
-	// A model asked for tools may answer in prose instead, which is a legitimate outcome
-	// under "auto" — so an empty result here is not an error and leaves the reply unchanged.
-	if content, calls, ok := parseToolCalls(tc.rend, tc.msgs, tc.toolsJSON, tc.toolChoice, sb.String()); ok {
+	// A model asked for tools may answer in prose instead, which is legitimate under "auto",
+	// so no calls is not an error and leaves the reply unchanged. A parse FAILURE is different
+	// and is reported: the reply still goes out with the raw generation, because dropping the
+	// turn would be worse, but it no longer looks like the model simply declined.
+	content, calls, err := parseToolCalls(tc, sb.String())
+	switch {
+	case err != nil:
+		log.Printf("api: tool-call parse failed (%v) — returning the raw generation as content; "+
+			"tool_calls will be absent and that is NOT the model declining", err)
+	case len(calls) > 0:
 		msg.Content = content
 		msg.ToolCalls = calls
 		fr = "tool_calls"
@@ -580,11 +595,18 @@ func (s *Server) streamChat(w http.ResponseWriter, model string, st *engine.Stre
 
 	fr := finishReason(reason)
 	if tc.toolsJSON != "" {
-		content, calls, ok := parseToolCalls(tc.rend, tc.msgs, tc.toolsJSON, tc.toolChoice, buffered.String())
-		if ok {
+		content, calls, err := parseToolCalls(tc, buffered.String())
+		switch {
+		case err != nil:
+			// Report it and release what was held. The turn is never silently dropped, and
+			// the absent tool_calls no longer reads as the model choosing prose.
+			log.Printf("api: tool-call parse failed on the streaming path (%v) — releasing the "+
+				"raw generation; tool_calls will be absent and that is NOT the model declining", err)
+			send(choice{Index: 0, Delta: &respMessage{Content: buffered.String()}})
+		case len(calls) > 0:
 			send(choice{Index: 0, Delta: &respMessage{Content: content, ToolCalls: calls}})
 			fr = "tool_calls"
-		} else {
+		default:
 			// The model answered in prose, which is legitimate under "auto". Release what
 			// was held so a buffered turn is never silently dropped.
 			send(choice{Index: 0, Delta: &respMessage{Content: buffered.String()}})
@@ -631,20 +653,36 @@ func renderWithTools(rend engine.Renderer, msgs []engine.ChatMessage, think *boo
 	return tr.RenderChatTools(msgs, toolsJSON, toolChoice, think != nil && *think)
 }
 
-// parseToolCalls reads a completion back for the calls the model asked for. The final bool is
-// false when there is nothing to report — no tools were offered, the backend cannot parse
-// them, or the model answered in prose.
-func parseToolCalls(rend engine.Renderer, msgs []engine.ChatMessage, toolsJSON, toolChoice, text string) (string, []respToolCall, bool) {
-	if toolsJSON == "" {
-		return text, nil, false
+// errNoToolSupport reports that tools were requested of a backend that cannot render them.
+var errNoToolSupport = errors.New("api: this backend cannot parse tool calls")
+
+// parseToolCalls reads a completion back for the calls the model asked for.
+//
+// ⛔ THREE OUTCOMES, DELIBERATELY DISTINGUISHABLE. A nil error with no calls means the model
+// was asked and chose prose, which is legitimate under "auto". A non-nil error means the parse
+// itself failed and NOTHING can be concluded about what the model wanted. Collapsing those two
+// into one boolean is how a broken parse looks exactly like a model declining: the caller gets
+// a 200, the raw generation lands in `content`, and nobody learns the parse failed. That is not
+// hypothetical — a fleet card was observed emitting a complete, well-formed tool call as text
+// while the API reported no calls, and this discard is why it took an experiment to see.
+//
+// Callers decide what to do with a failure; they must not treat it as "no calls".
+func parseToolCalls(tc toolCtx, text string) (string, []respToolCall, error) {
+	if tc.toolsJSON == "" {
+		return text, nil, nil
 	}
-	tr, ok := rend.(engine.ToolRenderer)
+	tr, ok := tc.rend.(engine.ToolRenderer)
 	if !ok || tr == nil {
-		return text, nil, false
+		// The request carried tools and this backend cannot render them. Saying so is the
+		// point: answering anyway would be a confident reply to a request never served.
+		return text, nil, errNoToolSupport
 	}
-	content, calls, err := tr.ParseChatOutput(msgs, toolsJSON, toolChoice, text)
-	if err != nil || len(calls) == 0 {
-		return text, nil, false
+	content, calls, err := tr.ParseChatOutput(tc.msgs, tc.toolsJSON, tc.toolChoice, text, tc.think)
+	if err != nil {
+		return text, nil, err
+	}
+	if len(calls) == 0 {
+		return text, nil, nil
 	}
 	out := make([]respToolCall, 0, len(calls))
 	for i, c := range calls {
@@ -657,7 +695,7 @@ func parseToolCalls(rend engine.Renderer, msgs []engine.ChatMessage, toolsJSON, 
 			Function: respToolFunction{Name: c.Name, Arguments: c.Arguments},
 		})
 	}
-	return content, out, true
+	return content, out, nil
 }
 
 // renderWithThinking renders a chat, suppressing the model's reasoning block unless the

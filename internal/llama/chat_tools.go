@@ -87,7 +87,11 @@ func callWithGrowingBuffer(first int, call func(buf *C.char, size C.int32_t) C.i
 // superset of ApplyChatTemplate rather than an alternative to it. Because the model's template
 // does the formatting, a model with an unusual tool syntax is handled correctly without this
 // package knowing anything about it.
-func (m *Model) ApplyChatTemplateTools(msgs []ChatMessage, toolsJSON, toolChoice string, addAssistant bool) (string, error) {
+// think selects the template's reasoning branch. Passing false makes the template emit the
+// CLOSED block itself; a caller that does that must NOT also append a no-think prime, or the two
+// nest. The core-template path needs the prime because it knows nothing about thinking — this
+// one does not.
+func (m *Model) ApplyChatTemplateTools(msgs []ChatMessage, toolsJSON, toolChoice string, addAssistant, think bool) (string, error) {
 	if len(msgs) == 0 {
 		return "", ErrNoChatTemplate
 	}
@@ -100,13 +104,17 @@ func (m *Model) ApplyChatTemplateTools(msgs []ChatMessage, toolsJSON, toolChoice
 	if addAssistant {
 		addAss = 1
 	}
+	thinking := C.int(0)
+	if think {
+		thinking = 1
+	}
 	hint := len(toolsJSON) + 2048
 	for _, msg := range msgs {
 		hint += (len(msg.Role) + len(msg.Content)) * 2
 	}
 	return callWithGrowingBuffer(hint, func(buf *C.char, size C.int32_t) C.int32_t {
-		return C.lhchat_apply_template_tools(unsafe.Pointer(m.c), blob, tools,
-			toolChoiceCode(toolChoice), addAss, buf, size)
+		return C.lhchat_apply_template_tools_ex(unsafe.Pointer(m.c), blob, tools,
+			toolChoiceCode(toolChoice), addAss, thinking, buf, size)
 	})
 }
 
@@ -115,7 +123,10 @@ func (m *Model) ApplyChatTemplateTools(msgs []ChatMessage, toolsJSON, toolChoice
 // The messages, tools and choice must be the ones the prompt was rendered with. The parser is
 // derived from that render, and one derived from different inputs reads the same text with the
 // wrong grammar — reporting no calls rather than an error.
-func (m *Model) ParseOutput(msgs []ChatMessage, toolsJSON, toolChoice, text string) (ParsedOutput, error) {
+// think must be the SAME value the render used. The parser configuration is derived from a
+// re-render, and it carries the think tags; rendering with thinking off and parsing with it on
+// reads the text with the wrong grammar and reports no calls rather than an error.
+func (m *Model) ParseOutput(msgs []ChatMessage, toolsJSON, toolChoice, text string, think bool) (ParsedOutput, error) {
 	var out ParsedOutput
 	blob := C.CString(encodeMessages(msgs))
 	defer C.free(unsafe.Pointer(blob))
@@ -123,10 +134,14 @@ func (m *Model) ParseOutput(msgs []ChatMessage, toolsJSON, toolChoice, text stri
 	defer C.free(unsafe.Pointer(tools))
 	ctext := C.CString(text)
 	defer C.free(unsafe.Pointer(ctext))
+	thinking := C.int(0)
+	if think {
+		thinking = 1
+	}
 
 	raw, err := callWithGrowingBuffer(len(text)*2+1024, func(buf *C.char, size C.int32_t) C.int32_t {
-		return C.lhchat_parse_output(unsafe.Pointer(m.c), blob, tools,
-			toolChoiceCode(toolChoice), ctext, buf, size)
+		return C.lhchat_parse_output_ex(unsafe.Pointer(m.c), blob, tools,
+			toolChoiceCode(toolChoice), ctext, thinking, buf, size)
 	})
 	if err != nil {
 		return out, err

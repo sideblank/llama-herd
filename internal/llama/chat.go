@@ -119,29 +119,27 @@ func (r *Runner) RenderChatTools(msgs []engine.ChatMessage, toolsJSON, toolChoic
 	for i, m := range msgs {
 		conv[i] = ChatMessage{Role: m.Role, Content: m.Content}
 	}
-	out, err := r.model.ApplyChatTemplateTools(conv, toolsJSON, toolChoice, true)
-	if err != nil {
-		return "", err
-	}
-	// The prime is appended after rendering, exactly as RenderChatThinking does it — a
-	// reasoning model handed tools still reasons otherwise, and the caller who asked for
-	// tools did not thereby ask to pay for a reasoning block.
-	if think || r.thinkPrime == "" {
-		return out, nil
-	}
-	return out + r.thinkPrime, nil
+	// ⛔ think goes INTO the template, and the prime is NOT appended afterwards. This path
+	// renders the model's real Jinja template, which branches on enable_thinking and emits the
+	// CLOSED block itself when thinking is off. Appending the prime on top of that nests a
+	// second reasoning block inside the first, unclosed — which is what this code did before,
+	// because the shim defaulted enable_thinking to true and the prime went on regardless.
+	// The core-template path still needs the prime: it knows nothing about thinking at all.
+	return r.model.ApplyChatTemplateTools(conv, toolsJSON, toolChoice, true, think)
 }
 
 // ParseChatOutput separates a completion into prose and the tool calls the model asked for.
 //
-// The arguments must match the render: the parser comes from the same template application,
-// and one built from different inputs reads the text with the wrong grammar and finds nothing.
-func (r *Runner) ParseChatOutput(msgs []engine.ChatMessage, toolsJSON, toolChoice, text string) (string, []engine.ToolCall, error) {
+// The arguments must match the render — think included: the parser comes from the same template
+// application and carries its think tags, so one built from different inputs reads the text with
+// the wrong grammar and finds nothing. It reports that as zero calls, not as an error, which is
+// why the caller must not treat "no calls" as proof the model declined.
+func (r *Runner) ParseChatOutput(msgs []engine.ChatMessage, toolsJSON, toolChoice, text string, think bool) (string, []engine.ToolCall, error) {
 	conv := make([]ChatMessage, len(msgs))
 	for i, m := range msgs {
 		conv[i] = ChatMessage{Role: m.Role, Content: m.Content}
 	}
-	out, err := r.model.ParseOutput(conv, toolsJSON, toolChoice, text)
+	out, err := r.model.ParseOutput(conv, toolsJSON, toolChoice, text, think)
 	if err != nil {
 		return text, nil, err
 	}
