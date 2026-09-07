@@ -682,6 +682,29 @@ func parseToolCalls(tc toolCtx, text string) (string, []respToolCall, error) {
 		return text, nil, err
 	}
 	if len(calls) == 0 {
+		// ⛔ THE LIBRARY FINDING NOTHING IS NOT PROOF THE MODEL DECLINED. llama.cpp's grammar for
+		// the Qwen XML form permutes REQUIRED parameters but requires optional ones to follow all
+		// of them, while the model emits parameters in schema-declaration order — so a call whose
+		// first parameter is optional matches nothing. Present in every revision through the
+		// current master, so pinning forward does not avoid it.
+		//
+		// When the library finds nothing but the completion carries a well-formed block, read the
+		// format the template documents. Reported as a distinct outcome by the caller, so the two
+		// parsers can never silently disagree: exactly one answers, and the response says which.
+		if native, rest := parseToolXML(text); len(native) > 0 {
+			for i := range native {
+				if native[i].ID == "" {
+					native[i].ID = fmt.Sprintf("call_%d", i)
+				}
+			}
+			// Announced, never silent — if these two ever disagree about a call, the log says
+			// which one produced it. Not an error: the calls are real and the request succeeded.
+			log.Printf("api: llama.cpp parsed no tool calls but the completion carries %d "+
+				"well-formed one(s); using the template-documented format", len(native))
+			return rest, native, nil
+		}
+	}
+	if len(calls) == 0 {
 		return text, nil, nil
 	}
 	out := make([]respToolCall, 0, len(calls))
