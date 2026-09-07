@@ -119,6 +119,20 @@ RUN set -eux; \
         -lllama -lggml -lggml-base \
         -Wl,-rpath,'$ORIGIN' -Wl,--allow-shlib-undefined; \
     cp /shim/lhspec.h /opt/llama/include/; \
+    # The chat shim: tool definitions reach a model only through common/chat.cpp's Jinja
+    # path, and its interface passes std::vector and std::string by reference — the same
+    # reason lhspec exists. Built against the same tree and the same common library, so the
+    # renderer and the parser cannot drift from the library that defines the format.
+    g++ -O2 -fPIC -shared -std=c++17 \
+        -I/src/llama.cpp/include -I/src/llama.cpp/ggml/include -I/src/llama.cpp/common \
+        -I/src/llama.cpp/vendor -I/shim \
+        /shim/lhchat.cpp \
+        -o /opt/llama/lib/liblhchat.so \
+        -L"$(dirname "$LC")" -L/opt/llama/lib \
+        $WHOLE \
+        -lllama -lggml -lggml-base \
+        -Wl,-rpath,'$ORIGIN' -Wl,--allow-shlib-undefined; \
+    cp /shim/lhchat.h /opt/llama/include/; \
     # llama-bench is the standard measurement for a GGUF: prompt processing and token
     # generation reported separately, repeated, with the build number attached. Keeping it in
     # the image means our own figures can always be checked against the reference on the same

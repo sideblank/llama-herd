@@ -7,7 +7,11 @@
 // against this without a plugin, a fork, or a per-tool integration.
 package api
 
-import "github.com/sideblank/llama-herd/internal/engine"
+import (
+	"encoding/json"
+
+	"github.com/sideblank/llama-herd/internal/engine"
+)
 
 // ChatRequest is the subset of the chat-completions request this server honours.
 type ChatRequest struct {
@@ -24,6 +28,21 @@ type ChatRequest struct {
 
 	// Stop accepts either a string or an array, which is why it is decoded loosely.
 	Stop stopValue `json:"stop,omitempty"`
+
+	// Tools are function definitions the model may call, in the OpenAI shape. They are kept
+	// as raw JSON because they are passed to the model's own chat template unchanged: the
+	// template decides how a tool is presented, and every model presents them differently.
+	//
+	// A server that accepts this field and ignores it is worse than one that rejects it. The
+	// model then answers from its own knowledge, and the reply is indistinguishable from one
+	// where it considered the tools and chose not to use them — so the caller has no way to
+	// discover that the tools were never offered.
+	Tools json.RawMessage `json:"tools,omitempty"`
+
+	// ToolChoice is "auto" (default), "required", "none", or the object form naming one
+	// function. The object form is treated as "required": the model must call something, and
+	// it still chooses from the list it was given.
+	ToolChoice json.RawMessage `json:"tool_choice,omitempty"`
 
 	// Think asks the model to reason before answering. Reasoning is off by default: left to
 	// itself a reasoning model decides per request, and the decision is often a near-tie, so

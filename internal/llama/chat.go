@@ -105,6 +105,35 @@ func (r *Runner) RenderChat(msgs []engine.ChatMessage) (string, error) {
 	return ApplyChatTemplate(r.chatTmpl, conv, true)
 }
 
+// RenderChatTools renders messages together with tool definitions, using this model's own
+// template.
+//
+// An empty toolsJSON renders exactly as RenderChat does, so callers can pass whatever the
+// request carried without branching. Tools reach the model only through this path: the core
+// template call takes messages alone and drops a tools array without reporting it.
+func (r *Runner) RenderChatTools(msgs []engine.ChatMessage, toolsJSON, toolChoice string) (string, error) {
+	if toolsJSON == "" {
+		return r.RenderChat(msgs)
+	}
+	conv := make([]ChatMessage, len(msgs))
+	for i, m := range msgs {
+		conv[i] = ChatMessage{Role: m.Role, Content: m.Content}
+	}
+	return r.model.ApplyChatTemplateTools(conv, toolsJSON, toolChoice, true)
+}
+
+// ParseChatOutput separates a completion into prose and the tool calls the model asked for.
+//
+// The arguments must match the render: the parser comes from the same template application,
+// and one built from different inputs reads the text with the wrong grammar and finds nothing.
+func (r *Runner) ParseChatOutput(msgs []engine.ChatMessage, toolsJSON, toolChoice, text string) (ParsedOutput, error) {
+	conv := make([]ChatMessage, len(msgs))
+	for i, m := range msgs {
+		conv[i] = ChatMessage{Role: m.Role, Content: m.Content}
+	}
+	return r.model.ParseOutput(conv, toolsJSON, toolChoice, text)
+}
+
 // DefaultNoThinkPrime opens and immediately closes a reasoning block, so a model that would
 // otherwise reason continues straight into its answer.
 //
