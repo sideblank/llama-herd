@@ -123,6 +123,16 @@ RUN set -eux; \
     # path, and its interface passes std::vector and std::string by reference — the same
     # reason lhspec exists. Built against the same tree and the same common library, so the
     # renderer and the parser cannot drift from the library that defines the format.
+    #
+    # A revision without the templates API cannot render tools at all. Say so here, where the
+    # cause is obvious, rather than letting the compiler report a missing declaration fifty
+    # lines into a header the reader did not open. There is deliberately no stub: a build that
+    # quietly produced a server accepting tools and ignoring them would recreate the failure
+    # this shim exists to remove.
+    if ! grep -q common_chat_templates_apply /src/llama.cpp/common/chat.h 2>/dev/null; then \
+      echo "this llama.cpp predates common_chat_templates_apply — tool calling cannot be built against it"; \
+      exit 1; \
+    fi; \
     g++ -O2 -fPIC -shared -std=c++17 \
         -I/src/llama.cpp/include -I/src/llama.cpp/ggml/include -I/src/llama.cpp/common \
         -I/src/llama.cpp/vendor -I/shim \
